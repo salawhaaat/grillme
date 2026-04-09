@@ -28,7 +28,7 @@ def _create_session(client) -> int:
 
     with patch("app.routes.sessions.jd_service") as mock_jds, \
          patch("app.services.llm.LLMService.complete", new=fake_complete):
-        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK))
+        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK, "1. Study Python"))
         resp = client.post("/api/sessions/from-jd", json={"jd": JD_TEXT})
     assert resp.status_code == 200
     return resp.json()["session_id"]
@@ -42,7 +42,7 @@ def test_create_session_from_jd(client):
 
     with patch("app.routes.sessions.jd_service") as mock_jds, \
          patch("app.services.llm.LLMService.complete", new=fake_complete):
-        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK))
+        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK, "1. Study Python"))
         resp = client.post("/api/sessions/from-jd", json={"jd": JD_TEXT})
 
     assert resp.status_code == 200

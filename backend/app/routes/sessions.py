@@ -1,9 +1,11 @@
 import json
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -11,21 +13,47 @@ from app.core.logging import setup_logger
 from app.models.session import InterviewSession
 from app.services.jd import JDService
 from app.services.llm import LLMService, RateLimitError, ProviderError
+from app.services.scraper import ScraperService
 
 logger = setup_logger(__name__)
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 llm = LLMService()
 jd_service = JDService(llm=llm)
+scraper = ScraperService()
+
+DIFFICULTY_INSTRUCTIONS: dict[str, str] = {
+    "rare": (
+        "DIFFICULTY — RARE: Be warm and encouraging like a patient mentor. "
+        "If the candidate seems stuck or has not made clear progress within 2 exchanges, "
+        "proactively offer a specific hint framed as 'one thing to consider…'. "
+        "Never let them flounder for more than 2 messages without a nudge."
+    ),
+    "medium": (
+        "DIFFICULTY — MEDIUM: Provide hints only if the candidate explicitly asks for help. "
+        "Offer at most one focused hint per question. Maintain a professional, neutral tone."
+    ),
+    "well_done": (
+        "DIFFICULTY — WELL DONE: Never volunteer hints under any circumstances. "
+        "If an answer is incomplete or incorrect, express professional dissatisfaction and "
+        "push back with a sharper follow-up question. Challenge every assumption. "
+        "Make the candidate rigorously justify their reasoning. "
+        "You may interrupt with clarifying questions to expose gaps. "
+        "This is a high-bar interview — fail candidates who do not meet the bar."
+    ),
+}
 
 
 def _build_system_prompt(session: InterviewSession) -> str:
+    difficulty_block = DIFFICULTY_INSTRUCTIONS.get(session.difficulty or "medium", DIFFICULTY_INSTRUCTIONS["medium"])
+
     base = (
         f"{session.persona}\n\n"
         f"You are conducting a technical mock interview for {session.role} at "
         f"{session.company} ({session.level} level).\n\n"
         "Rules: ask ONE question at a time, follow up on incomplete answers, "
         "stay in character throughout.\n\n"
+        f"{difficulty_block}\n\n"
     )
     if not session.question_bank:
         return base
@@ -46,8 +74,30 @@ def _build_system_prompt(session: InterviewSession) -> str:
     return base + structure
 
 
+# ── Request / Response models ──────────────────────────────────────────────
+
 class FromJDRequest(BaseModel):
     jd: str
+    difficulty: Literal["rare", "medium", "well_done"] = "medium"
+
+    @field_validator("jd")
+    @classmethod
+    def jd_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("jd must not be empty")
+        return v
+
+
+class FromProblemRequest(BaseModel):
+    problem_url: str
+    difficulty: Literal["rare", "medium", "well_done"] = "medium"
+
+    @field_validator("problem_url")
+    @classmethod
+    def url_is_leetcode(cls, v: str) -> str:
+        if "leetcode.com/problems/" not in v:
+            raise ValueError("problem_url must be a leetcode.com/problems/ URL")
+        return v
 
 
 class MessageRequest(BaseModel):
@@ -57,14 +107,64 @@ class MessageRequest(BaseModel):
 class SessionResponse(BaseModel):
     id: int
     mode: str
+    difficulty: str
     company: str | None
     role: str | None
     level: str | None
     persona: str | None
+    prep_plan: str | None
+    problem_url: str | None
     scorecard: dict | None
     messages: list[dict]
     created_at: datetime
     finished_at: datetime | None
+
+
+class SessionListItem(BaseModel):
+    id: int
+    mode: str
+    difficulty: str
+    company: str | None
+    role: str | None
+    level: str | None
+    overall_score: int | None
+    message_count: int
+    created_at: datetime
+    finished_at: datetime | None
+
+
+# ── Routes ─────────────────────────────────────────────────────────────────
+
+@router.get("/", response_model=list[SessionListItem])
+async def list_sessions(db: AsyncSession = Depends(get_db)) -> list[SessionListItem]:
+    result = await db.execute(
+        select(InterviewSession).order_by(InterviewSession.created_at.desc())
+    )
+    sessions = result.scalars().all()
+
+    items = []
+    for s in sessions:
+        score: int | None = None
+        if s.scorecard:
+            try:
+                score = json.loads(s.scorecard).get("overall_score")
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+        messages = json.loads(s.messages) if s.messages else []
+        items.append(SessionListItem(
+            id=s.id,
+            mode=s.mode,
+            difficulty=s.difficulty or "medium",
+            company=s.company,
+            role=s.role,
+            level=s.level,
+            overall_score=score,
+            message_count=len(messages),
+            created_at=s.created_at,
+            finished_at=s.finished_at,
+        ))
+    return items
 
 
 @router.post("/from-jd")
@@ -73,7 +173,7 @@ async def create_from_jd(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     try:
-        parsed, persona, question_bank = await jd_service.process_jd(body.jd)
+        parsed, persona, question_bank, prep_plan = await jd_service.process_jd(body.jd)
     except Exception as e:
         logger.error("JD processing failed: %s", e)
         raise HTTPException(503, f"LLM processing failed: {e}") from e
@@ -94,12 +194,14 @@ async def create_from_jd(
 
     session = InterviewSession(
         mode="jd",
+        difficulty=body.difficulty,
         jd_raw=body.jd,
         company=parsed.get("company"),
         role=parsed.get("role"),
         level=parsed.get("level"),
         persona=persona,
         question_bank=json.dumps(question_bank),
+        prep_plan=prep_plan,
         messages=json.dumps([{"role": "assistant", "content": opening}]),
     )
     db.add(session)
@@ -111,6 +213,8 @@ async def create_from_jd(
         "company": session.company,
         "role": session.role,
         "level": session.level,
+        "difficulty": session.difficulty,
+        "prep_plan": session.prep_plan,
         "opening_message": opening,
     }
 
@@ -127,10 +231,13 @@ async def get_session(
     return SessionResponse(
         id=session.id,
         mode=session.mode,
+        difficulty=session.difficulty or "medium",
         company=session.company,
         role=session.role,
         level=session.level,
         persona=session.persona,
+        prep_plan=session.prep_plan,
+        problem_url=session.problem_url,
         scorecard=json.loads(session.scorecard) if session.scorecard else None,
         messages=json.loads(session.messages),
         created_at=session.created_at,
@@ -172,6 +279,64 @@ async def send_message(
         await db.commit()
 
     return StreamingResponse(generate(), media_type="text/plain")
+
+
+@router.post("/from-problem")
+async def create_from_problem(
+    body: FromProblemRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    problem = await scraper.scrape(body.problem_url)
+    if not problem:
+        raise HTTPException(422, "Could not scrape problem — check the URL")
+
+    try:
+        persona = await jd_service.build_problem_persona(problem)
+    except Exception as e:
+        logger.error("Persona generation failed: %s", e)
+        raise HTTPException(503, f"LLM processing failed: {e}") from e
+
+    opening = await llm.complete([
+        {
+            "role": "system",
+            "content": (
+                f"{persona}\n\n"
+                f"You are starting a coding interview. Present this problem clearly, "
+                f"then ask the candidate to walk you through their initial approach "
+                f"before writing any code.\n\n"
+                f"Problem: {problem['title']}\n\n{problem['description']}"
+            ),
+        },
+        {"role": "user", "content": "Begin."},
+    ])
+
+    session = InterviewSession(
+        mode="problem",
+        difficulty=body.difficulty,
+        company="Technical Interview",
+        role="Software Engineer",
+        level="mid",
+        persona=persona,
+        problem_url=body.problem_url,
+        question_bank=json.dumps({
+            "warmup": [],
+            "trivia": [],
+            "culture_fit": [],
+            "coding": {"type": "leetcode", "topic": problem["title"], "hints": []},
+        }),
+        messages=json.dumps([{"role": "assistant", "content": opening}]),
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+
+    return {
+        "session_id": session.id,
+        "problem_title": problem["title"],
+        "problem_difficulty": problem["difficulty"],
+        "difficulty": session.difficulty,
+        "opening_message": opening,
+    }
 
 
 @router.post("/{session_id}/finish")

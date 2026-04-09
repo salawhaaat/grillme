@@ -85,27 +85,35 @@ async def test_generate_question_bank_returns_structured_dict(jd_service, mock_l
     assert kwargs.get("json_mode") is True
 
 
-async def test_process_jd_chains_three_steps(jd_service, mock_llm):
+async def test_process_jd_parallelizes_after_parse(jd_service, mock_llm):
+    """parse_jd runs first; then persona, question_bank, prep_plan run in parallel (4 LLM calls)."""
     bank = {"warmup": ["Tell me about yourself"], "trivia": ["What is a kernel panic?"],
             "culture_fit": ["Tell me about a hard bug"], "coding": {"type": "system_design",
             "topic": "Design CI/CD", "hints": []}}
     mock_llm.complete.side_effect = [
-        json.dumps(PARSED_JD),
-        "You are Alex, a Stripe engineer.",
-        json.dumps(bank),
+        json.dumps(PARSED_JD),           # parse_jd
+        "You are Alex, a Stripe engineer.",  # build_persona  (gathered)
+        json.dumps(bank),                # generate_question_bank (gathered)
+        "1. Study system design\n2. Practice algorithms",  # generate_prep_plan (gathered)
     ]
 
-    parsed, persona, question_bank = await jd_service.process_jd(JD_TEXT)
+    parsed, persona, question_bank, prep_plan = await jd_service.process_jd(JD_TEXT)
 
     assert parsed["company"] == "Stripe"
     assert "Alex" in persona
     assert "warmup" in question_bank
-    assert mock_llm.complete.call_count == 3
+    assert "system design" in prep_plan
+    assert mock_llm.complete.call_count == 4
 
 
-async def test_generate_scorecard_returns_json_string(jd_service, mock_llm):
-    scorecard = {"overall_score": 8, "strengths": ["clear thinking"], "recommendation": "hire"}
-    mock_llm.complete.return_value = json.dumps(scorecard)
+async def test_generate_scorecard_uses_reflection(jd_service, mock_llm):
+    """generate_scorecard makes 2 LLM calls: draft then reflect/refine."""
+    scorecard = {"overall_score": 8, "strengths": ["clear thinking"],
+                 "areas_to_improve": ["depth"], "recommendation": "hire"}
+    mock_llm.complete.side_effect = [
+        json.dumps(scorecard),   # draft
+        json.dumps({**scorecard, "overall_score": 7}),  # reflection-refined
+    ]
     messages = [
         {"role": "user", "content": "Tell me about yourself"},
         {"role": "assistant", "content": "I have 5 years of Python experience."},
@@ -113,8 +121,21 @@ async def test_generate_scorecard_returns_json_string(jd_service, mock_llm):
 
     result = await jd_service.generate_scorecard(messages, "You are Alex from Stripe.")
 
-    assert isinstance(result, str)
+    assert mock_llm.complete.call_count == 2
     parsed = json.loads(result)
     assert "overall_score" in parsed
-    _, kwargs = mock_llm.complete.call_args
-    assert kwargs.get("json_mode") is True
+    # Both calls must use json_mode
+    for call in mock_llm.complete.call_args_list:
+        _, kwargs = call
+        assert kwargs.get("json_mode") is True
+
+
+async def test_build_problem_persona_returns_string(jd_service, mock_llm):
+    mock_llm.complete.return_value = "You are Sam, a Google coding interviewer."
+    problem = {"title": "Two Sum", "difficulty": "Easy"}
+
+    result = await jd_service.build_problem_persona(problem)
+
+    assert isinstance(result, str)
+    assert len(result) > 0
+    mock_llm.complete.assert_called_once()

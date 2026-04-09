@@ -1,3 +1,4 @@
+import asyncio
 import json
 from app.services.llm import LLMService
 from app.core.logging import setup_logger
@@ -115,32 +116,85 @@ class JDService:
         raw = await self.llm.complete(messages, json_mode=True)
         return json.loads(raw)
 
-    async def process_jd(self, jd_raw: str) -> tuple[dict, str, dict]:
-        """Prompt Chaining: parse JD → build persona → generate question bank."""
-        parsed = await self.parse_jd(jd_raw)
-        persona = await self.build_persona(parsed)
-        question_bank = await self.generate_question_bank(parsed)
-        return parsed, persona, question_bank
-
-    async def generate_scorecard(self, messages: list[dict], persona: str) -> str:
-        """Generate a structured scorecard after the interview ends."""
-        transcript = "\n".join(
-            f"{m['role'].upper()}: {m['content']}" for m in messages
-        )
-        scorecard_messages = [
+    async def build_problem_persona(self, problem: dict) -> str:
+        """Build a coding interviewer persona for a LeetCode-style problem session."""
+        messages = [
             {
                 "role": "system",
                 "content": (
-                    f"{persona}\n\n"
-                    "You just finished a mock interview. Score the candidate and return "
-                    "ONLY valid JSON with: overall_score (int 1-10), "
-                    "strengths (list of strings), areas_to_improve (list of strings), "
-                    "recommendation (string: hire/no_hire/strong_hire)."
+                    "You are creating a realistic technical interviewer character for a coding round. "
+                    "Give them a name and a brief personality. They are concise, professional, "
+                    "and focused on evaluating problem-solving approach, code quality, and communication."
                 ),
             },
             {
                 "role": "user",
-                "content": f"Interview transcript:\n\n{transcript}",
+                "content": (
+                    f"Build a coding interviewer persona for this problem:\n"
+                    f"Title: {problem['title']}\n"
+                    f"Difficulty: {problem['difficulty']}"
+                ),
             },
         ]
-        return await self.llm.complete(scorecard_messages, json_mode=True)
+        return await self.llm.complete(messages)
+
+    async def process_jd(self, jd_raw: str) -> tuple[dict, str, dict, str]:
+        """Parallelization: parse JD, then gather persona + question bank + prep plan concurrently."""
+        parsed = await self.parse_jd(jd_raw)
+        persona, question_bank, prep_plan = await asyncio.gather(
+            self.build_persona(parsed),
+            self.generate_question_bank(parsed),
+            self.generate_prep_plan(parsed),
+        )
+        return parsed, persona, question_bank, prep_plan
+
+    async def generate_scorecard(self, messages: list[dict], persona: str) -> str:
+        """Reflection pattern: draft scorecard → self-critique → refined final."""
+        transcript = "\n".join(
+            f"{m['role'].upper()}: {m['content']}" for m in messages
+        )
+
+        # Step 1 — draft
+        draft = await self.llm.complete(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        f"{persona}\n\n"
+                        "You just finished a mock interview. Score the candidate and return "
+                        "ONLY valid JSON with: overall_score (int 1-10), "
+                        "strengths (list of strings), areas_to_improve (list of strings), "
+                        "recommendation (string: hire/no_hire/strong_hire)."
+                    ),
+                },
+                {"role": "user", "content": f"Interview transcript:\n\n{transcript}"},
+            ],
+            json_mode=True,
+        )
+
+        # Step 2 — reflect and refine
+        refined = await self.llm.complete(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a calibration reviewer for interview scorecards. "
+                        "You will receive a draft scorecard and the original interview transcript. "
+                        "Check for: score inflation/deflation, missed strengths, missed weaknesses, "
+                        "inconsistency between scores and evidence. "
+                        "Return an improved version as ONLY valid JSON with the same keys: "
+                        "overall_score (int 1-10), strengths (list), areas_to_improve (list), "
+                        "recommendation (hire/no_hire/strong_hire)."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Draft scorecard:\n{draft}\n\n"
+                        f"Interview transcript:\n{transcript}"
+                    ),
+                },
+            ],
+            json_mode=True,
+        )
+        return refined
