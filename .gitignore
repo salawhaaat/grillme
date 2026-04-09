@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Environment
+.env
+
+# Database
+*.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Docs
+CLAUDE.MD
+
+# Internal project notes
+_project/
+
+# Empty uv default
+backend/README.md
+
+# Build
+dist/
+build/
+node_modules/
