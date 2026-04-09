@@ -44,6 +44,16 @@ GEMINI_API_KEY=your_key_here
 cd backend && uv run uvicorn app.main:app --reload
 ```
 
+## Data
+
+SQLite database is stored locally — never committed to git.
+
+```
+backend/app/data/grillme.db
+```
+
+Delete it to reset all sessions and recreate the schema on next server start.
+
 ## API Docs
 
 With the server running:

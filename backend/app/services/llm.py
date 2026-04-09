@@ -67,6 +67,57 @@ class LLMService:
             if content is not None:
                 yield content
 
+    async def complete(self, messages: list[dict], json_mode: bool = False) -> str:
+        provider = settings.llm_provider
+
+        if provider in ("openai", "groq"):
+            return await self._complete_compat(messages, json_mode)
+        elif provider == "gemini":
+            return await self._complete_gemini(messages)
+        else:
+            raise ValueError(f"Unknown provider: '{provider}'")
+
+    async def _complete_compat(self, messages: list[dict], json_mode: bool = False) -> str:
+        provider = settings.llm_provider
+        if provider == "groq":
+            if not settings.groq_api_key:
+                raise ValueError("GROQ_API_KEY is not set in .env")
+            client = AsyncOpenAI(
+                api_key=settings.groq_api_key,
+                base_url="https://api.groq.com/openai/v1",
+            )
+        else:
+            if not settings.openai_api_key:
+                raise ValueError("OPENAI_API_KEY is not set in .env")
+            client = AsyncOpenAI(api_key=settings.openai_api_key)
+
+        kwargs: dict = dict(model=settings.llm_model, messages=messages)
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = await client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content
+
+    async def _complete_gemini(self, messages: list[dict]) -> str:
+        if not settings.gemini_api_key:
+            raise ValueError("GEMINI_API_KEY is not set in .env")
+
+        client = genai.Client(api_key=settings.gemini_api_key)
+        prompt = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages)
+
+        try:
+            response = await client.aio.models.generate_content(
+                model=settings.llm_model,
+                contents=prompt,
+            )
+            return response.text
+        except ClientError as e:
+            if e.code == 429:
+                raise RateLimitError(str(e)) from e
+            raise ProviderError(str(e)) from e
+        except ServerError as e:
+            raise ProviderError(str(e)) from e
+
     async def _stream_gemini(self, messages: list[dict]) -> AsyncIterator[str]:
         if not settings.gemini_api_key:
             raise ValueError("GEMINI_API_KEY is not set in .env")
