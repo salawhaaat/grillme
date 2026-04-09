@@ -3,11 +3,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.database import init_db
 from app.routes.problems import router as problems_router
+from app.routes.chat import router as chat_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
+    await init_db()   # создаёт таблицы при старте
     yield
 
 
@@ -21,6 +22,7 @@ app.add_middleware(
 )
 
 app.include_router(problems_router)
+app.include_router(chat_router)
 
 
 @app.get("/api/health")
