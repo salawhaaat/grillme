@@ -1,5 +1,6 @@
 from unittest.mock import AsyncMock, patch
 
+from app.agents.schemas import CodingRound, ParsedJD, PersonaOutput, PipelineResult, QuestionBank
 from app.services.jd import detect_oa_platform
 
 
@@ -43,10 +44,23 @@ def test_create_from_jd_response_includes_oa_platform(client):
     async def fake_complete(*_, **__):
         return "Hi, I'm Alex. Let's start."
 
-    with patch("app.routes.sessions.jd_service") as mock_jds, \
+    with patch("app.routes.sessions.orchestrator") as mock_orch, \
          patch("app.services.llm.LLMService.complete", new=fake_complete):
-        mock_jds.process_jd = AsyncMock(
-            return_value=(parsed, persona, question_bank, prep_plan, "HackerRank")
+        mock_orch.run_jd_pipeline = AsyncMock(
+            return_value=PipelineResult(
+                parsed_jd=ParsedJD(**parsed),
+                persona=PersonaOutput(
+                    persona_text=persona,
+                    question_bank=QuestionBank(
+                        warmup=question_bank["warmup"],
+                        trivia=question_bank["trivia"],
+                        culture_fit=question_bank["culture_fit"],
+                        coding=CodingRound(**question_bank["coding"]),
+                    ),
+                    prep_plan=prep_plan,
+                    oa_platform="HackerRank",
+                ),
+            )
         )
         resp = client.post(
             "/api/sessions/from-jd",

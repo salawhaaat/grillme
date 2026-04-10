@@ -1,6 +1,15 @@
 import json
 from unittest.mock import AsyncMock, patch
 
+from app.agents.schemas import (
+    CodingRound,
+    ParsedJD,
+    PersonaOutput,
+    PipelineResult,
+    QuestionBank,
+    ScorecardResult,
+)
+
 JD_TEXT = "Stripe is hiring a Senior Software Engineer to build payment infrastructure."
 
 PARSED = {
@@ -22,13 +31,39 @@ QUESTION_BANK = {
 }
 
 
+def _pipeline_result(
+    prep_plan: str = "1. Study Python",
+    oa_platform: str | None = None,
+) -> PipelineResult:
+    return PipelineResult(
+        parsed_jd=ParsedJD(
+            company=PARSED["company"],
+            role=PARSED["role"],
+            level=PARSED["level"],
+            key_skills=PARSED["key_skills"],
+            focus_areas=PARSED["focus_areas"],
+        ),
+        persona=PersonaOutput(
+            persona_text=PERSONA,
+            question_bank=QuestionBank(
+                warmup=QUESTION_BANK["warmup"],
+                trivia=QUESTION_BANK["trivia"],
+                culture_fit=QUESTION_BANK["culture_fit"],
+                coding=CodingRound(**QUESTION_BANK["coding"]),
+            ),
+            prep_plan=prep_plan,
+            oa_platform=oa_platform,
+        ),
+    )
+
+
 def _create_session(client) -> int:
     async def fake_complete(*_, **__):
         return OPENING
 
-    with patch("app.routes.sessions.jd_service") as mock_jds, \
+    with patch("app.routes.sessions.orchestrator") as mock_orch, \
          patch("app.services.llm.LLMService.complete", new=fake_complete):
-        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK, "1. Study Python", None))
+        mock_orch.run_jd_pipeline = AsyncMock(return_value=_pipeline_result())
         resp = client.post("/api/sessions/from-jd", json={"jd": JD_TEXT})
     assert resp.status_code == 200
     return resp.json()["session_id"]
@@ -40,9 +75,9 @@ def test_create_session_from_jd(client):
     async def fake_complete(*_, **__):
         return OPENING
 
-    with patch("app.routes.sessions.jd_service") as mock_jds, \
+    with patch("app.routes.sessions.orchestrator") as mock_orch, \
          patch("app.services.llm.LLMService.complete", new=fake_complete):
-        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK, "1. Study Python", None))
+        mock_orch.run_jd_pipeline = AsyncMock(return_value=_pipeline_result())
         resp = client.post("/api/sessions/from-jd", json={"jd": JD_TEXT})
 
     assert resp.status_code == 200
@@ -118,15 +153,16 @@ def test_send_message_session_not_found(client):
 
 def test_finish_session(client):
     session_id = _create_session(client)
-    scorecard = json.dumps({
-        "overall_score": 8,
-        "strengths": ["clear thinking"],
-        "areas_to_improve": ["depth on distributed systems"],
-        "recommendation": "hire",
-    })
 
-    with patch("app.routes.sessions.jd_service") as mock_jds:
-        mock_jds.generate_scorecard = AsyncMock(return_value=scorecard)
+    with patch("app.routes.sessions.orchestrator") as mock_orch:
+        mock_orch.run_scoring = AsyncMock(
+            return_value=ScorecardResult(
+                overall_score=8,
+                strengths=["clear thinking"],
+                areas_to_improve=["depth on distributed systems"],
+                recommendation="hire",
+            )
+        )
         resp = client.post(f"/api/sessions/{session_id}/finish")
 
     assert resp.status_code == 200

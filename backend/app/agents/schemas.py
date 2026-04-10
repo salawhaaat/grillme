@@ -52,6 +52,12 @@ class PersonaOutput(BaseModel):
     oa_platform: str | None = None
 
 
+class PipelineResult(BaseModel):
+    parsed_jd: ParsedJD
+    persona: PersonaOutput
+    research: ResearchIntel | None = None
+
+
 class ScorerInput(BaseModel):
     messages: list[dict]
     persona: str

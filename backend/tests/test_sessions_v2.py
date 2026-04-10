@@ -2,6 +2,15 @@
 import json
 from unittest.mock import AsyncMock, patch
 
+from app.agents.schemas import (
+    CodingRound,
+    ParsedJD,
+    PersonaOutput,
+    PipelineResult,
+    QuestionBank,
+    ScorecardResult,
+)
+
 JD_TEXT = "Google is hiring a Staff Engineer on the Search team."
 PARSED = {"company": "Google", "role": "Staff Engineer", "level": "staff", "key_skills": ["algorithms"], "focus_areas": ["systems"]}
 PERSONA = "You are Jordan, a Google interviewer."
@@ -14,13 +23,36 @@ QUESTION_BANK = {
 }
 
 
+def _pipeline_result() -> PipelineResult:
+    return PipelineResult(
+        parsed_jd=ParsedJD(
+            company=PARSED["company"],
+            role=PARSED["role"],
+            level=PARSED["level"],
+            key_skills=PARSED["key_skills"],
+            focus_areas=PARSED["focus_areas"],
+        ),
+        persona=PersonaOutput(
+            persona_text=PERSONA,
+            question_bank=QuestionBank(
+                warmup=QUESTION_BANK["warmup"],
+                trivia=QUESTION_BANK["trivia"],
+                culture_fit=QUESTION_BANK["culture_fit"],
+                coding=CodingRound(**QUESTION_BANK["coding"]),
+            ),
+            prep_plan="1. Study Python",
+            oa_platform=None,
+        ),
+    )
+
+
 def _create_session(client, difficulty: str = "medium") -> int:
     async def fake_complete(*_, **__):
         return OPENING
 
-    with patch("app.routes.sessions.jd_service") as mock_jds, \
+    with patch("app.routes.sessions.orchestrator") as mock_orch, \
          patch("app.services.llm.LLMService.complete", new=fake_complete):
-        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK, "1. Study Python", None))
+        mock_orch.run_jd_pipeline = AsyncMock(return_value=_pipeline_result())
         resp = client.post("/api/sessions/from-jd", json={"jd": JD_TEXT, "difficulty": difficulty})
     assert resp.status_code == 200
     return resp.json()["session_id"]
@@ -32,9 +64,9 @@ def test_difficulty_defaults_to_medium(client):
     async def fake_complete(*_, **__):
         return OPENING
 
-    with patch("app.routes.sessions.jd_service") as mock_jds, \
+    with patch("app.routes.sessions.orchestrator") as mock_orch, \
          patch("app.services.llm.LLMService.complete", new=fake_complete):
-        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK, "1. Study Python", None))
+        mock_orch.run_jd_pipeline = AsyncMock(return_value=_pipeline_result())
         resp = client.post("/api/sessions/from-jd", json={"jd": JD_TEXT})
 
     session_id = resp.json()["session_id"]
@@ -53,9 +85,9 @@ def test_invalid_difficulty_rejected(client):
     async def fake_complete(*_, **__):
         return OPENING
 
-    with patch("app.routes.sessions.jd_service") as mock_jds, \
+    with patch("app.routes.sessions.orchestrator") as mock_orch, \
          patch("app.services.llm.LLMService.complete", new=fake_complete):
-        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK, "1. Study Python", None))
+        mock_orch.run_jd_pipeline = AsyncMock(return_value=_pipeline_result())
         resp = client.post("/api/sessions/from-jd", json={"jd": JD_TEXT, "difficulty": "god_mode"})
 
     assert resp.status_code == 422
@@ -93,16 +125,15 @@ def test_list_sessions_ordered_newest_first(client):
 
 def test_list_sessions_includes_score_when_finished(client):
     sid = _create_session(client)
-    scorecard = json.dumps({
-        "overall_score": 9,
-        "summary": "Excellent",
-        "strengths": ["clear"],
-        "improvements": [],
-        "sections": [],
-    })
-
-    with patch("app.routes.sessions.jd_service") as mock_jds:
-        mock_jds.generate_scorecard = AsyncMock(return_value=scorecard)
+    with patch("app.routes.sessions.orchestrator") as mock_orch:
+        mock_orch.run_scoring = AsyncMock(
+            return_value=ScorecardResult(
+                overall_score=9,
+                strengths=["clear"],
+                areas_to_improve=[],
+                recommendation="hire",
+            )
+        )
         client.post(f"/api/sessions/{sid}/finish")
 
     resp = client.get("/api/sessions/")

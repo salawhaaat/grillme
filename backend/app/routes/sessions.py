@@ -10,9 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.logging import setup_logger
+from app.agents.orchestrator import Orchestrator
 from app.models.problem import Problem
 from app.models.session import InterviewSession
-from app.services.jd import JDService
 from app.services.llm import LLMService, RateLimitError, ProviderError
 from app.services.scraper import ScraperService
 
@@ -20,7 +20,7 @@ logger = setup_logger(__name__)
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 llm = LLMService()
-jd_service = JDService(llm=llm)
+orchestrator = Orchestrator(llm=llm)
 scraper = ScraperService()
 
 DIFFICULTY_INSTRUCTIONS: dict[str, str] = {
@@ -177,7 +177,12 @@ async def create_from_jd(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     try:
-        parsed, persona, question_bank, prep_plan, oa_platform = await jd_service.process_jd(body.jd)
+        result = await orchestrator.run_jd_pipeline(body.jd)
+        parsed = result.parsed_jd.model_dump()
+        persona = result.persona.persona_text
+        question_bank = result.persona.question_bank.model_dump()
+        prep_plan = result.persona.prep_plan
+        oa_platform = result.persona.oa_platform
     except Exception as e:
         logger.error("JD processing failed: %s", e)
         raise HTTPException(503, f"LLM processing failed: {e}") from e
@@ -323,7 +328,7 @@ async def create_from_problem(
             ))
 
     try:
-        persona = await jd_service.build_problem_persona(problem)
+        persona = await orchestrator.build_problem_persona(problem)
     except Exception as e:
         logger.error("Persona generation failed: %s", e)
         raise HTTPException(503, f"LLM processing failed: {e}") from e
@@ -382,7 +387,8 @@ async def finish_session(
 
     messages = json.loads(session.messages)
     try:
-        scorecard_raw = await jd_service.generate_scorecard(messages, session.persona or "")
+        scorecard_result = await orchestrator.run_scoring(messages, session.persona or "")
+        scorecard_raw = scorecard_result.model_dump_json()
     except Exception as e:
         logger.error("Scorecard generation failed: %s", e)
         raise HTTPException(503, f"Scorecard generation failed: {e}") from e

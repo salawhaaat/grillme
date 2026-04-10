@@ -14,10 +14,10 @@ def _create_problem_session(client):
         return "Hi, let's begin."
 
     with patch("app.routes.sessions.scraper") as mock_scraper, \
-         patch("app.routes.sessions.jd_service") as mock_jds, \
+         patch("app.routes.sessions.orchestrator") as mock_orch, \
          patch("app.services.llm.LLMService.complete", new=fake_complete):
         mock_scraper.scrape = AsyncMock(return_value=PROBLEM)
-        mock_jds.build_problem_persona = AsyncMock(return_value="You are Sam, interviewer.")
+        mock_orch.build_problem_persona = AsyncMock(return_value="You are Sam, interviewer.")
         return client.post(
             "/api/sessions/from-problem",
             json={"problem_url": PROBLEM_URL},
