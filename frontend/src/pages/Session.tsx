@@ -41,6 +41,7 @@ export default function SessionPage() {
   const [testResult, setTestResult] = useState<TestResult | null>(null)
   const [terminalTab, setTerminalTab] = useState<"console" | "tests">("console")
   const [running, setRunning] = useState(false)
+  const [showClosingPrompt, setShowClosingPrompt] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -148,7 +149,12 @@ export default function SessionPage() {
     }
   }
 
-  async function handleFinish() {
+  function handleFinishClick() {
+    setShowClosingPrompt(true)
+  }
+
+  async function handleFinishConfirmed() {
+    setShowClosingPrompt(false)
     setFinishing(true)
     try {
       await api.finishSession(sessionId)
@@ -178,7 +184,7 @@ export default function SessionPage() {
           </div>
           <button
             className="px-4 py-1.5 text-xs font-bold rounded-xl bg-surface-container-highest text-on-surface hover:bg-surface-bright transition-colors active:scale-[0.97] disabled:opacity-40"
-            onClick={handleFinish}
+            onClick={handleFinishClick}
             disabled={finishing || messages.length < 2}
           >
             {finishing ? (
@@ -385,6 +391,36 @@ export default function SessionPage() {
           </div>
         </div>
       </div>
+
+      {showClosingPrompt && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-xl rounded-2xl border border-outline-variant/30 bg-surface-container p-5 space-y-4">
+            <h3 className="text-lg font-bold text-on-surface">Before you finish</h3>
+            <p className="text-sm text-on-surface-variant leading-relaxed">
+              Before you finish — do you have any questions for the interviewer? Asking thoughtful questions about the team, role, or what they care about is part of the interview and will affect your score.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowClosingPrompt(false)
+                  inputRef.current?.focus()
+                }}
+                className="px-3 py-2 text-xs font-semibold rounded-lg border border-outline-variant/30 text-on-surface-variant hover:bg-surface-container-high transition-colors"
+              >
+                I have questions
+              </button>
+              <button
+                type="button"
+                onClick={handleFinishConfirmed}
+                className="px-3 py-2 text-xs font-semibold rounded-lg shimmer-gradient text-on-primary hover:opacity-90 transition-opacity"
+              >
+                I'm done — score me
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

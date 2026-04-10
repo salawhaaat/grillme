@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import { useParams, useNavigate, Link } from "react-router-dom"
-import { api, type Scorecard, type Session } from "@/lib/api/client"
+import { api, type Scorecard, type ScorecardAxes, type Session } from "@/lib/api/client"
 import { cn, scoreColorText, scoreColorBg } from "@/lib/utils"
 
 function ScoreRing({ score }: { score: number }) {
@@ -29,6 +29,24 @@ function SectionBar({ name, score, feedback }: { name: string; score: number; fe
     </div>
   )
 }
+
+const AXIS_LABELS: Record<keyof ScorecardAxes, string> = {
+  technical_correctness: "Technical Correctness",
+  process_of_thought: "Process of Thought",
+  curiosity: "Curiosity",
+  self_presentation: "Self Presentation",
+  closing_questions: "Closing Questions",
+  code_quality: "Code Quality",
+}
+
+const AXIS_ORDER: Array<keyof ScorecardAxes> = [
+  "technical_correctness",
+  "process_of_thought",
+  "curiosity",
+  "self_presentation",
+  "closing_questions",
+  "code_quality",
+]
 
 export default function ScorecardPage() {
   const { id } = useParams<{ id: string }>()
@@ -123,13 +141,37 @@ export default function ScorecardPage() {
             </div>
             <div className="px-6 pb-6">
               <p className="text-sm text-on-surface-variant leading-relaxed">
-                {scorecard.summary}
+                {scorecard.summary ?? (scorecard.recommendation ? `Recommendation: ${scorecard.recommendation.replace(/_/g, " ")}` : "Interview completed.")}
               </p>
             </div>
           </div>
 
-          {/* Section breakdown */}
-          {scorecard.sections?.length > 0 && (
+          {/* Six-axis breakdown */}
+          {scorecard.axes ? (
+            <div className="bg-surface-container rounded-xl border border-outline-variant/20 p-6 space-y-5">
+              <h2 className="text-xs font-bold uppercase tracking-widest text-outline">
+                Breakdown
+              </h2>
+              {AXIS_ORDER.map((key) => {
+                const axis = scorecard.axes![key]
+                return (
+                  <div key={key} className="space-y-1.5">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="font-semibold text-on-surface uppercase tracking-wider">{AXIS_LABELS[key]}</span>
+                      <span className="text-outline font-mono">{axis.score}/10</span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-surface-container-highest overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-primary transition-all duration-700"
+                        style={{ width: `${Math.max(0, Math.min(axis.score, 10)) * 10}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-on-surface-variant leading-relaxed">{axis.comment}</p>
+                  </div>
+                )
+              })}
+            </div>
+          ) : scorecard.sections?.length ? (
             <div className="bg-surface-container rounded-xl border border-outline-variant/20 p-6 space-y-5">
               <h2 className="text-xs font-bold uppercase tracking-widest text-outline">
                 Breakdown
@@ -138,7 +180,7 @@ export default function ScorecardPage() {
                 <SectionBar key={s.name} {...s} />
               ))}
             </div>
-          )}
+          ) : null}
 
           {/* Strengths & Improvements */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -167,7 +209,7 @@ export default function ScorecardPage() {
                 To improve
               </h2>
               <ul className="space-y-2.5">
-                {scorecard.improvements.map((s, i) => (
+                {scorecard.areas_to_improve.map((s, i) => (
                   <li key={i} className="text-sm text-on-surface-variant flex gap-2 leading-relaxed">
                     <span className="text-tertiary mt-0.5 shrink-0">•</span>
                     {s}

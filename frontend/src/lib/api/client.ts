@@ -84,12 +84,29 @@ export interface Message {
   content: string
 }
 
+export interface AxisScore {
+  score: number
+  comment: string
+}
+
+export interface ScorecardAxes {
+  technical_correctness: AxisScore
+  process_of_thought: AxisScore
+  curiosity: AxisScore
+  self_presentation: AxisScore
+  closing_questions: AxisScore
+  code_quality: AxisScore
+}
+
 export interface Scorecard {
   overall_score: number
-  summary: string
+  axes?: ScorecardAxes
   strengths: string[]
-  improvements: string[]
-  sections: ScorecardSection[]
+  areas_to_improve: string[]
+  recommendation?: string
+  summary?: string
+  improvements?: string[]
+  sections?: ScorecardSection[]
 }
 
 export interface ScorecardSection {
@@ -145,15 +162,15 @@ async function del<T>(path: string): Promise<T> {
 
 function normalizeScorecard(raw: RawScorecard | null): Scorecard | null {
   if (!raw || typeof raw.overall_score !== "number") return null
-  const improvements = raw.improvements ?? raw.areas_to_improve ?? []
-  const summary =
-    raw.summary ??
-    (raw.recommendation ? `Recommendation: ${raw.recommendation.replace(/_/g, " ")}` : "Interview completed.")
+  const areasToImprove = raw.areas_to_improve ?? raw.improvements ?? []
   return {
     overall_score: raw.overall_score,
-    summary,
+    axes: raw.axes,
     strengths: Array.isArray(raw.strengths) ? raw.strengths : [],
-    improvements: Array.isArray(improvements) ? improvements : [],
+    areas_to_improve: Array.isArray(areasToImprove) ? areasToImprove : [],
+    recommendation: raw.recommendation,
+    summary: raw.summary,
+    improvements: Array.isArray(raw.improvements) ? raw.improvements : [],
     sections: Array.isArray(raw.sections) ? raw.sections : [],
   }
 }

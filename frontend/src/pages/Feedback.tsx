@@ -135,11 +135,13 @@ export default function FeedbackPage() {
                 <span className="material-symbols-outlined text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>summarize</span>
                 Overall Summary
               </p>
-              <p className="text-sm text-on-surface leading-relaxed">{scorecard.summary}</p>
+              <p className="text-sm text-on-surface leading-relaxed">
+                {scorecard.summary ?? "Interview completed."}
+              </p>
             </div>
 
             {/* Detailed section breakdown */}
-            {scorecard.sections?.length > 0 && (
+            {(scorecard.sections?.length ?? 0) > 0 && (
               <div className="bg-surface-container rounded-xl border border-outline-variant/20 overflow-hidden">
                 <div className="px-5 py-4 border-b border-outline-variant/20">
                   <h2 className="text-xs font-bold text-outline uppercase tracking-wider flex items-center gap-1.5">
@@ -148,7 +150,7 @@ export default function FeedbackPage() {
                   </h2>
                 </div>
                 <div className="divide-y divide-outline-variant/10">
-                  {scorecard.sections.map((section) => (
+                  {(scorecard.sections ?? []).map((section) => (
                     <div key={section.name} className="px-5 py-4 space-y-2">
                       <div className="flex items-center justify-between">
                         <span className="text-sm font-semibold text-on-surface">{section.name}</span>
@@ -186,7 +188,7 @@ export default function FeedbackPage() {
                   To Improve
                 </h2>
                 <ul className="space-y-3">
-                  {scorecard.improvements.map((s, i) => (
+                  {(scorecard.improvements ?? scorecard.areas_to_improve ?? []).map((s, i) => (
                     <li key={i} className="flex gap-2 text-sm text-on-surface-variant leading-relaxed">
                       <span className="text-tertiary shrink-0 mt-0.5">•</span>
                       {s}
