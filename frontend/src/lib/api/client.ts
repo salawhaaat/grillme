@@ -1,6 +1,24 @@
 const BASE = "/api"
 
 export type Difficulty = "rare" | "medium" | "well_done"
+export type SessionSource = "jd" | "url" | "text"
+
+export interface CreateSessionResponse {
+  session_id: number
+  source: SessionSource
+  difficulty: Difficulty
+  company: string | null
+  role: string | null
+  level: string | null
+  problem: {
+    title: string
+    difficulty: string
+    statement: string
+    method_name: string
+  }
+  starter_code: string
+  opening_message: string
+}
 
 export interface SessionInfo {
   session_id: number
@@ -31,6 +49,13 @@ export interface Session {
   prep_plan: string | null
   cv_text: string | null
   problem_url: string | null
+  problem_statement: string | null
+  starter_code: string | null
+  test_cases: {
+    method_name: string
+    test_cases: Array<{ input: unknown[]; expected: unknown }>
+  } | null
+  method_name: string | null
   scorecard: Scorecard | null
   prompt_tokens: number
   completion_tokens: number
@@ -141,6 +166,13 @@ function normalizeSession(session: Session): Session {
 }
 
 export const api = {
+  createSession: (
+    source: SessionSource,
+    content: string,
+    difficulty: Difficulty = "medium",
+  ) =>
+    post<CreateSessionResponse>("/sessions/create", { source, content, difficulty }),
+
   createSessionFromJD: (
     jd: string,
     difficulty: Difficulty = "medium",
