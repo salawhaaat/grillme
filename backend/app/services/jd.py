@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 from app.services.llm import LLMService
+from app.services.research import ResearchService
 from app.core.logging import setup_logger
 
 logger = setup_logger(__name__)
@@ -31,8 +32,9 @@ def detect_oa_platform(jd_raw: str) -> str | None:
 
 
 class JDService:
-    def __init__(self, llm: LLMService) -> None:
+    def __init__(self, llm: LLMService, research: ResearchService | None = None) -> None:
         self.llm = llm
+        self.research = research
 
     async def parse_jd(self, jd_raw: str) -> dict:
         """Step 1 — extract structured info from a raw job description."""
@@ -165,11 +167,22 @@ class JDService:
     async def process_jd(self, jd_raw: str) -> tuple[dict, str, dict, str, str | None]:
         """Parallelization: parse JD, then gather persona + question bank + prep plan concurrently."""
         parsed = await self.parse_jd(jd_raw)
-        persona, question_bank, prep_plan = await asyncio.gather(
+        tasks = [
             self.build_persona(parsed),
             self.generate_question_bank(parsed),
             self.generate_prep_plan(parsed),
-        )
+        ]
+        if self.research:
+            tasks.append(self.research.search(parsed.get("company", ""), parsed.get("role", "")))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        if len(results) < 3 or any(isinstance(r, Exception) for r in results[:3]):
+            first_exception = next((r for r in results if isinstance(r, Exception)), RuntimeError("JD pipeline failed"))
+            raise first_exception
+
+        persona = results[0]
+        question_bank = results[1]
+        prep_plan = results[2]
         oa_platform = detect_oa_platform(jd_raw)
         return parsed, persona, question_bank, prep_plan, oa_platform
 

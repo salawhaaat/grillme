@@ -140,3 +140,30 @@ async def test_build_problem_persona_returns_string(jd_service, mock_llm):
     assert isinstance(result, str)
     assert len(result) > 0
     mock_llm.complete.assert_called_once()
+
+
+async def test_process_jd_ignores_research_failure(mock_llm):
+    mock_research = AsyncMock()
+    mock_research.search = AsyncMock(side_effect=RuntimeError("research down"))
+    service = JDService(llm=mock_llm, research=mock_research)
+
+    bank = {
+        "warmup": ["Tell me about yourself"],
+        "trivia": ["Explain CAP theorem"],
+        "culture_fit": ["Describe a conflict"],
+        "coding": {"type": "system_design", "topic": "Design CI/CD", "hints": []},
+    }
+    mock_llm.complete.side_effect = [
+        json.dumps(PARSED_JD),
+        "You are Alex, a Stripe engineer.",
+        json.dumps(bank),
+        "1. Study system design\n2. Practice algorithms",
+    ]
+
+    parsed, persona, question_bank, prep_plan, oa_platform = await service.process_jd(JD_TEXT)
+
+    assert parsed["company"] == "Stripe"
+    assert "Alex" in persona
+    assert "warmup" in question_bank
+    assert "system design" in prep_plan
+    assert oa_platform is None
