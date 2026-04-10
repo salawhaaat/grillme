@@ -68,6 +68,12 @@ export interface ScorecardSection {
   feedback: string
 }
 
+export interface UserWeakness {
+  area: string
+  frequency: number
+  last_session_id: number | null
+}
+
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
@@ -102,6 +108,9 @@ export const api = {
 
   getSession: (id: number) =>
     get<Session>(`/sessions/${id}`),
+
+  getUserMemory: () =>
+    get<UserWeakness[]>("/sessions/memory"),
 
   finishSession: (id: number) =>
     post<{ scorecard: Scorecard }>(`/sessions/${id}/finish`, {}),

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react"
 import { useNavigate } from "react-router-dom"
-import { api, type SessionListItem } from "@/lib/api/client"
+import { api, type SessionListItem, type UserWeakness } from "@/lib/api/client"
 import { cn, scoreColorText } from "@/lib/utils"
 import { DIFFICULTY_META } from "@/lib/constants/difficulty"
 import { Sidebar } from "@/components/Sidebar"
@@ -22,10 +22,16 @@ function StatCard({ label, value, icon }: { label: string; value: string | numbe
 export default function ProfilePage() {
   const navigate = useNavigate()
   const [sessions, setSessions] = useState<SessionListItem[]>([])
+  const [weaknesses, setWeaknesses] = useState<UserWeakness[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api.listSessions().then(setSessions).finally(() => setLoading(false))
+    Promise.all([api.listSessions(), api.getUserMemory()])
+      .then(([sessionData, memoryData]) => {
+        setSessions(sessionData)
+        setWeaknesses(memoryData)
+      })
+      .finally(() => setLoading(false))
   }, [])
 
   const finished = useMemo(() => sessions.filter((s) => s.finished_at && s.overall_score !== null), [sessions])
@@ -49,6 +55,26 @@ export default function ProfilePage() {
   }, [finished])
 
   const recentSessions = useMemo(() => sessions.slice(0, 5), [sessions])
+  const finishedScores = useMemo(
+    () =>
+      [...finished]
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+        .map((s) => s.overall_score ?? 0),
+    [finished],
+  )
+  const topWeaknesses = useMemo(() => weaknesses.slice(0, 3), [weaknesses])
+
+  function weaknessPillClass(freq: number) {
+    if (freq >= 3) return "bg-error/20 border-error/40 text-error"
+    if (freq === 2) return "bg-warning/20 border-warning/40 text-warning"
+    return "bg-outline-variant/20 border-outline-variant/40 text-on-surface-variant"
+  }
+
+  function scoreBarColor(score: number) {
+    if (score >= 7) return "bg-green-500/80"
+    if (score >= 5) return "bg-yellow-500/80"
+    return "bg-red-500/80"
+  }
 
   return (
     <div className="h-screen overflow-hidden flex flex-col bg-background">
@@ -179,6 +205,78 @@ export default function ProfilePage() {
                     </div>
                   </div>
                 )}
+
+                <div className="bg-surface-container rounded-xl border border-outline-variant/20 p-5 space-y-4">
+                  <h2 className="text-xs font-bold text-outline uppercase tracking-wider">
+                    Weak Areas
+                  </h2>
+                  {weaknesses.length === 0 ? (
+                    <p className="text-sm text-on-surface-variant">
+                      Complete interviews to start tracking your growth areas
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {weaknesses.map((w) => (
+                        <span
+                          key={w.area}
+                          className={cn(
+                            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs border font-semibold",
+                            weaknessPillClass(w.frequency),
+                          )}
+                        >
+                          <span>{w.area}</span>
+                          <span className="font-mono">{w.frequency}</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-surface-container rounded-xl border border-outline-variant/20 p-5 space-y-4">
+                  <h2 className="text-xs font-bold text-outline uppercase tracking-wider">
+                    Score Trend
+                  </h2>
+                  {finishedScores.length === 0 ? (
+                    <p className="text-sm text-on-surface-variant">No completed sessions yet.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-end gap-1 h-24">
+                        {finishedScores.map((s, i) => (
+                          <div
+                            key={i}
+                            className={cn("w-6 rounded-t", scoreBarColor(s))}
+                            style={{ height: `${(s / 10) * 100}%` }}
+                            title={`Session ${i + 1}: ${s}/10`}
+                          />
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-1 text-[10px] text-outline">
+                        {finishedScores.map((_, i) => (
+                          <span key={i} className="w-6 text-center">{i + 1}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-surface-container rounded-xl border border-outline-variant/20 p-5 space-y-2">
+                  <h2 className="text-xs font-bold text-outline uppercase tracking-wider">
+                    Improvement Areas
+                  </h2>
+                  {topWeaknesses.length === 0 ? (
+                    <p className="text-sm text-on-surface-variant">
+                      Keep finishing interviews to get personalized focus recommendations.
+                    </p>
+                  ) : (
+                    <p className="text-sm text-on-surface-variant leading-relaxed">
+                      Focus for next session:{" "}
+                      <span className="text-on-surface font-semibold">
+                        {topWeaknesses.map((w) => w.area).join(", ")}
+                      </span>
+                      .
+                    </p>
+                  )}
+                </div>
 
                 {sessions.length === 0 && (
                   <div className="flex flex-col items-center justify-center py-20 gap-4 text-center">

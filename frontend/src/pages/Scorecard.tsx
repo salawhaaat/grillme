@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { useParams, useNavigate } from "react-router-dom"
+import { useParams, useNavigate, Link } from "react-router-dom"
 import { api, type Scorecard, type Session } from "@/lib/api/client"
 import { cn, scoreColorText, scoreColorBg } from "@/lib/utils"
 
@@ -183,6 +183,13 @@ export default function ScorecardPage() {
           >
             Start a new interview
           </button>
+
+          <div className="text-center text-xs text-on-surface-variant">
+            <p>Your improvement areas have been saved to your profile</p>
+            <Link to="/profile" className="text-primary hover:underline">
+              View your progress →
+            </Link>
+          </div>
         </div>
       </div>
     </div>
