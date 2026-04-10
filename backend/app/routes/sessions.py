@@ -12,7 +12,7 @@ from app.core.database import get_db
 from app.core.logging import setup_logger
 from app.agents.memory import MemoryAgent
 from app.agents.orchestrator import Orchestrator
-from app.agents.schemas import ScorecardResult
+from app.agents.schemas import CodingProblem, ScorecardResult
 from app.models.problem import Problem
 from app.models.session import InterviewSession
 from app.models.user_memory import UserMemory
@@ -86,6 +86,17 @@ def _build_system_prompt(session: InterviewSession) -> str:
             "Candidate CV context (use only these facts for personalized follow-ups):\n"
             f"{_cv_context(session.cv_text)}\n\n"
         )
+    if session.full_problem:
+        base += (
+            "\n\nFULL PROBLEM (the candidate sees a CUT version without examples/constraints):\n"
+            f"{session.full_problem}\n\n"
+            f"The candidate has starter code:\n```python\n{session.starter_code or ''}\n```\n\n"
+            "RULES FOR THIS INTERVIEW:\n"
+            "- Only reveal examples, constraints, or edge cases when the candidate ASKS about them.\n"
+            "- If they don't ask and start coding, silently note it (it will affect their curiosity score).\n"
+            "- React to their code and test results when they share them.\n"
+            "- Near the end (after they solve or give up), wrap with 'That's all from me — do you have any questions for me?'\n"
+        )
     if not session.question_bank:
         return base
 
@@ -147,6 +158,19 @@ class FromProblemRequest(BaseModel):
         return v
 
 
+class CreateSessionRequest(BaseModel):
+    source: Literal["jd", "url", "text"]
+    content: str
+    difficulty: Literal["rare", "medium", "well_done"] = "medium"
+
+    @field_validator("content")
+    @classmethod
+    def content_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("content must not be empty")
+        return v
+
+
 class MessageRequest(BaseModel):
     content: str
 
@@ -163,6 +187,10 @@ class SessionResponse(BaseModel):
     cv_text: str | None
     oa_platform: str | None
     problem_url: str | None
+    problem_statement: str | None = None
+    starter_code: str | None = None
+    test_cases: dict | None = None
+    method_name: str | None = None
     scorecard: dict | None
     prompt_tokens: int
     completion_tokens: int
@@ -304,6 +332,95 @@ async def create_from_jd(
     }
 
 
+@router.post("/create")
+async def create_session(
+    body: CreateSessionRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    weakness_rows = await db.execute(
+        select(UserMemory).order_by(UserMemory.frequency.desc()).limit(5)
+    )
+    user_weaknesses = [w.area for w in weakness_rows.scalars().all()]
+
+    try:
+        result = await orchestrator.run_interview_pipeline(
+            source=body.source,
+            content=body.content,
+            difficulty=body.difficulty,
+            user_weaknesses=user_weaknesses,
+        )
+    except Exception as e:
+        logger.error("Interview pipeline failed: %s", e)
+        raise HTTPException(503, f"Pipeline failed: {e}") from e
+
+    problem = result.problem
+    persona = result.persona
+    parsed = result.parsed_jd
+
+    opening_messages = [
+        {
+            "role": "system",
+            "content": (
+                f"{persona.persona_text}\n\n"
+                "You are about to present a coding problem. State the problem in 2-3 sentences, "
+                "then WAIT. Do NOT ask 'any questions?' — do NOT hint that clarifying questions are expected. "
+                "Simply present the cut problem and stop."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Present this problem:\n{problem.problem_statement}",
+        },
+    ]
+    opening = await llm.complete(opening_messages)
+
+    session = InterviewSession(
+        mode=body.source,
+        difficulty=body.difficulty,
+        jd_raw=body.content if body.source == "jd" else None,
+        problem_url=body.content if body.source == "url" else None,
+        company=parsed.company if parsed else None,
+        role=parsed.role if parsed else None,
+        level=parsed.level if parsed else None,
+        persona=persona.persona_text,
+        oa_platform=persona.oa_platform,
+        problem_statement=problem.problem_statement,
+        full_problem=problem.full_problem,
+        starter_code=problem.starter_code,
+        test_cases=json.dumps({
+            "method_name": problem.method_name,
+            "test_cases": problem.test_cases,
+        }),
+        method_name=problem.method_name,
+        messages=json.dumps([{"role": "assistant", "content": opening}]),
+    )
+    _apply_usage(
+        session,
+        prompt_tokens=_estimate_messages_tokens(opening_messages),
+        completion_tokens=_estimate_text_tokens(opening),
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+
+    return {
+        "session_id": session.id,
+        "source": body.source,
+        "difficulty": body.difficulty,
+        "company": session.company,
+        "role": session.role,
+        "level": session.level,
+        "problem": {
+            "title": problem.title,
+            "difficulty": problem.difficulty,
+            "statement": problem.problem_statement,
+            "method_name": problem.method_name,
+        },
+        "starter_code": problem.starter_code,
+        "opening_message": opening,
+    }
+
+
 @router.get("/memory")
 async def get_user_memory(db: AsyncSession = Depends(get_db)) -> list[dict]:
     result = await db.execute(
@@ -372,6 +489,10 @@ async def get_session(
         cv_text=session.cv_text,
         oa_platform=session.oa_platform,
         problem_url=session.problem_url,
+        problem_statement=session.problem_statement,
+        starter_code=session.starter_code,
+        test_cases=json.loads(session.test_cases) if session.test_cases else None,
+        method_name=session.method_name,
         scorecard=json.loads(session.scorecard) if session.scorecard else None,
         prompt_tokens=session.prompt_tokens or 0,
         completion_tokens=session.completion_tokens or 0,
@@ -517,11 +638,32 @@ async def finish_session(
 
     messages = json.loads(session.messages)
     try:
-        scorecard_result = await orchestrator.run_scoring(messages, session.persona or "")
-        scorecard_raw = scorecard_result.model_dump_json()
+        problem_obj = None
+        if session.test_cases:
+            tc = json.loads(session.test_cases)
+            problem_obj = CodingProblem(
+                title=session.company or "Problem",
+                difficulty=session.difficulty or "medium",
+                problem_statement=session.problem_statement or "",
+                full_problem=session.full_problem or "",
+                starter_code=session.starter_code or "",
+                test_cases=tc.get("test_cases", []),
+                method_name=tc.get("method_name", ""),
+            )
+        scorecard_v2 = await orchestrator.run_six_axis_scoring(
+            messages=messages,
+            persona=session.persona or "",
+            problem=problem_obj,
+        )
+        scorecard_raw = scorecard_v2.model_dump_json()
     except Exception as e:
-        logger.error("Scorecard generation failed: %s", e)
-        raise HTTPException(503, f"Scorecard generation failed: {e}") from e
+        logger.error("Six-axis scoring failed, falling back to legacy scorer: %s", e)
+        try:
+            scorecard_result = await orchestrator.run_scoring(messages, session.persona or "")
+            scorecard_raw = scorecard_result.model_dump_json()
+        except Exception as inner:
+            logger.error("Scorecard generation failed: %s", inner)
+            raise HTTPException(503, f"Scorecard generation failed: {inner}") from inner
 
     session.scorecard = scorecard_raw
     session.finished_at = datetime.now(UTC)
