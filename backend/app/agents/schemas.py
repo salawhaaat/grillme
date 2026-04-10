@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -74,3 +76,52 @@ class UserWeakness(BaseModel):
     area: str
     frequency: int = 1
     last_seen: str
+
+
+class TestCase(BaseModel):
+    input: list = Field(default_factory=list)
+    expected: object
+
+
+class CodingProblem(BaseModel):
+    title: str
+    difficulty: str
+    problem_statement: str
+    full_problem: str
+    starter_code: str
+    test_cases: list[dict]
+    method_name: str
+
+
+class ProblemInput(BaseModel):
+    source: Literal["jd", "url", "text"]
+    content: str
+    parsed_jd: ParsedJD | None = None
+
+
+class CreateSessionInput(BaseModel):
+    source: Literal["jd", "url", "text"]
+    content: str
+    difficulty: Literal["rare", "medium", "well_done"] = "medium"
+
+
+class AxisScore(BaseModel):
+    score: int
+    comment: str
+
+
+class ScorecardAxes(BaseModel):
+    technical_correctness: AxisScore
+    process_of_thought: AxisScore
+    curiosity: AxisScore
+    self_presentation: AxisScore
+    closing_questions: AxisScore
+    code_quality: AxisScore
+
+
+class ScorecardV2(BaseModel):
+    overall_score: int
+    axes: ScorecardAxes
+    strengths: list[str]
+    areas_to_improve: list[str]
+    recommendation: str
