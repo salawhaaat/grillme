@@ -32,6 +32,7 @@ export default function SessionPage() {
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<LeftTab>("chat")
   const [notes, setNotes] = useState("")
+  const [showPrepPlan, setShowPrepPlan] = useState(true)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -53,6 +54,13 @@ export default function SessionPage() {
   }, [messages])
 
   const lastAiMessage = [...messages].reverse().find((m) => m.role === "assistant")
+  const problemTitleFromMessages = (() => {
+    const opening = messages.find((m) => m.role === "assistant")?.content ?? ""
+    const match =
+      opening.match(/problem\s+is\s+([^.\n]+)/i) ??
+      opening.match(/problem:\s*([^.\n]+)/i)
+    return match?.[1]?.trim() ?? null
+  })()
 
   async function handleSend() {
     if (!input.trim() || streaming) return
@@ -353,6 +361,11 @@ export default function SessionPage() {
                     {session.company} / {session.role}
                   </span>
                 )}
+                {session?.mode === "problem" && session.problem_url && (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-primary/10 text-primary border border-primary/30">
+                    {problemTitleFromMessages ?? "Coding Problem"}
+                  </span>
+                )}
               </div>
               <div className="flex gap-2">
                 <button className="p-1.5 text-outline hover:text-on-surface transition-colors">
@@ -363,6 +376,32 @@ export default function SessionPage() {
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4 space-y-4 font-body text-sm">
+              {session?.prep_plan && (
+                <div className="bg-surface-container rounded-xl border border-outline-variant/20">
+                  <button
+                    type="button"
+                    onClick={() => setShowPrepPlan((v) => !v)}
+                    className="w-full flex items-center justify-between px-4 py-3 text-left"
+                  >
+                    <span className="text-sm font-semibold text-on-surface">Prep Plan</span>
+                    <span className="material-symbols-outlined text-sm text-outline">
+                      {showPrepPlan ? "expand_less" : "expand_more"}
+                    </span>
+                  </button>
+                  {showPrepPlan && (
+                    <ol className="px-8 pb-4 list-decimal space-y-1 text-sm text-on-surface-variant">
+                      {session.prep_plan
+                        .split("\n")
+                        .map((line) => line.trim())
+                        .filter(Boolean)
+                        .map((line, idx) => (
+                          <li key={idx}>{line}</li>
+                        ))}
+                    </ol>
+                  )}
+                </div>
+              )}
+
               {messages.length === 0 && (
                 <div className="h-full flex items-center justify-center text-outline text-sm">
                   Loading session…

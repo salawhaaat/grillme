@@ -9,6 +9,15 @@ export interface SessionInfo {
   level: string | null
   difficulty: Difficulty
   opening_message: string
+  prep_plan?: string
+}
+
+export interface ProblemSessionInfo {
+  session_id: number
+  problem_title: string
+  problem_difficulty: string
+  difficulty: Difficulty
+  opening_message: string
 }
 
 export interface Session {
@@ -19,6 +28,8 @@ export interface Session {
   role: string | null
   level: string | null
   persona: string | null
+  prep_plan: string | null
+  problem_url: string | null
   scorecard: Scorecard | null
   messages: Message[]
   created_at: string
@@ -82,6 +93,9 @@ async function get<T>(path: string): Promise<T> {
 export const api = {
   createSessionFromJD: (jd: string, difficulty: Difficulty = "medium") =>
     post<SessionInfo>("/sessions/from-jd", { jd, difficulty: difficulty }),
+
+  createFromProblem: (problem_url: string, difficulty: Difficulty = "medium") =>
+    post<ProblemSessionInfo>("/sessions/from-problem", { problem_url, difficulty }),
 
   listSessions: () =>
     get<SessionListItem[]>("/sessions/"),

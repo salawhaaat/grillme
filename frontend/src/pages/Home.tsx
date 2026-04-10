@@ -6,6 +6,7 @@ import { Sidebar } from "@/components/Sidebar"
 import { DIFFICULTY_PICKER_META } from "@/lib/constants/difficulty"
 
 type Step = "paste" | "confirm"
+type SourceTab = "jd" | "problem"
 
 function useDraggable(initialPos: { x: number; y: number }) {
   const [pos, setPos] = useState(initialPos)
@@ -41,11 +42,14 @@ function useDraggable(initialPos: { x: number; y: number }) {
 
 export default function Home() {
   const navigate = useNavigate()
+  const [sourceTab, setSourceTab] = useState<SourceTab>("jd")
   const [jd, setJd] = useState("")
+  const [problemUrl, setProblemUrl] = useState("")
   const [step, setStep] = useState<Step>("paste")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null)
+  const [showPrepPlan, setShowPrepPlan] = useState(true)
   const [fileDragging, setFileDragging] = useState(false)
   const [difficulty, setDifficulty] = useState<Difficulty>("medium")
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -61,6 +65,27 @@ export default function Home() {
       const info = await api.createSessionFromJD(jd, difficulty)
       setSessionInfo(info)
       setStep("confirm")
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleStartFromProblem() {
+    if (!problemUrl.trim()) return
+    if (!problemUrl.includes("leetcode.com/problems/")) {
+      setError("URL must contain leetcode.com/problems/")
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+    try {
+      const info = await api.createFromProblem(problemUrl.trim(), difficulty)
+      navigate(`/session/${info.session_id}`, {
+        state: { openingMessage: info.opening_message },
+      })
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong")
     } finally {
@@ -127,10 +152,10 @@ export default function Home() {
                   description
                 </span>
                 <span className="text-xs font-bold text-on-surface uppercase tracking-widest font-label">
-                  Job Description
+                  {sourceTab === "jd" ? "Job Description" : "Problem URL"}
                 </span>
               </div>
-              {jd.trim() && step === "paste" && (
+              {sourceTab === "jd" && jd.trim() && step === "paste" && (
                 <button
                   onClick={() => setJd("")}
                   className="text-[10px] text-outline hover:text-error transition-colors flex items-center gap-1"
@@ -141,7 +166,41 @@ export default function Home() {
               )}
             </div>
 
-            {step === "paste" && (
+            <div className="px-4 pt-3">
+              <div className="inline-flex rounded-xl border border-outline-variant/30 bg-surface-container-lowest p-1 gap-1">
+                <button
+                  onClick={() => {
+                    setSourceTab("jd")
+                    setError(null)
+                  }}
+                  className={cn(
+                    "px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors",
+                    sourceTab === "jd"
+                      ? "bg-primary/20 border-primary text-primary"
+                      : "border-transparent text-on-surface-variant hover:text-on-surface",
+                  )}
+                >
+                  From JD
+                </button>
+                <button
+                  onClick={() => {
+                    setSourceTab("problem")
+                    setError(null)
+                    setStep("paste")
+                  }}
+                  className={cn(
+                    "px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors",
+                    sourceTab === "problem"
+                      ? "bg-primary/20 border-primary text-primary"
+                      : "border-transparent text-on-surface-variant hover:text-on-surface",
+                  )}
+                >
+                  From Problem
+                </button>
+              </div>
+            </div>
+
+            {step === "paste" && sourceTab === "jd" && (
               <div className="flex-1 flex flex-col p-4 gap-3 overflow-hidden">
                 {/* Drop zone */}
                 <div
@@ -266,7 +325,75 @@ export default function Home() {
               </div>
             )}
 
-            {step === "confirm" && sessionInfo && (
+            {step === "paste" && sourceTab === "problem" && (
+              <div className="flex-1 flex flex-col p-4 gap-3 overflow-hidden">
+                <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/20 p-4 space-y-3">
+                  <label className="text-[10px] font-bold text-outline uppercase tracking-wider">
+                    LeetCode URL
+                  </label>
+                  <input
+                    type="text"
+                    value={problemUrl}
+                    onChange={(e) => setProblemUrl(e.target.value)}
+                    placeholder="https://leetcode.com/problems/two-sum/"
+                    className="w-full bg-transparent border border-outline-variant/30 rounded-xl px-3 py-2 text-sm text-on-surface placeholder:text-outline focus:outline-none focus:border-primary/50"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-bold text-outline uppercase tracking-wider px-0.5">
+                    Difficulty
+                  </p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(Object.entries(DIFFICULTY_PICKER_META) as [Difficulty, typeof DIFFICULTY_PICKER_META[Difficulty]][]).map(([key, meta]) => (
+                      <button
+                        key={key}
+                        onClick={() => setDifficulty(key)}
+                        className={cn(
+                          "flex flex-col items-center gap-1 py-2.5 rounded-xl border text-xs font-semibold transition-all",
+                          difficulty === key ? meta.active : meta.color,
+                        )}
+                      >
+                        <span
+                          className="material-symbols-outlined text-base"
+                          style={{ fontVariationSettings: "'FILL' 1" }}
+                        >
+                          {meta.icon}
+                        </span>
+                        <span className="font-bold">{meta.label}</span>
+                        <span className="text-[10px] opacity-70">{meta.desc}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {error && (
+                  <p className="text-error text-xs flex items-center gap-1.5 px-1">
+                    <span className="material-symbols-outlined text-sm">error</span>
+                    {error}
+                  </p>
+                )}
+                <button
+                  className="w-full py-2.5 text-sm font-bold rounded-xl shimmer-gradient text-on-primary hover:opacity-90 transition-opacity active:scale-[0.98] disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center gap-2"
+                  onClick={handleStartFromProblem}
+                  disabled={loading || !problemUrl.trim()}
+                >
+                  {loading ? (
+                    <>
+                      <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                      Starting session…
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-sm">code</span>
+                      Start Coding Interview
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {step === "confirm" && sourceTab === "jd" && sessionInfo && (
               <div className="flex-1 flex flex-col p-4 gap-4 overflow-y-auto no-scrollbar">
                 <div className="flex items-center gap-2">
                   <span className="material-symbols-outlined text-green-400 text-lg" style={{ fontVariationSettings: "'FILL' 1" }}>
@@ -298,6 +425,31 @@ export default function Home() {
                   </p>
                   <p className="text-sm text-on-surface leading-relaxed">"{sessionInfo.opening_message}"</p>
                 </div>
+                {sessionInfo.prep_plan && (
+                  <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/20">
+                    <button
+                      type="button"
+                      onClick={() => setShowPrepPlan((v) => !v)}
+                      className="w-full flex items-center justify-between px-4 py-3 text-left"
+                    >
+                      <p className="text-sm font-bold text-on-surface">Your Prep Plan</p>
+                      <span className="material-symbols-outlined text-sm text-outline">
+                        {showPrepPlan ? "expand_less" : "expand_more"}
+                      </span>
+                    </button>
+                    {showPrepPlan && (
+                      <ol className="px-8 pb-4 list-decimal space-y-1 text-sm text-on-surface-variant">
+                        {sessionInfo.prep_plan
+                          .split("\n")
+                          .map((line) => line.trim())
+                          .filter(Boolean)
+                          .map((line, idx) => (
+                            <li key={idx}>{line}</li>
+                          ))}
+                      </ol>
+                    )}
+                  </div>
+                )}
                 <div className="flex gap-3 shrink-0">
                   <button
                     className="flex-1 py-2.5 text-sm font-semibold rounded-xl border border-outline-variant/30 text-on-surface-variant bg-surface-container-lowest hover:bg-surface-container-high transition-colors"
