@@ -51,6 +51,31 @@ async def _run_migrations(conn: AsyncConnection) -> None:
             "ALTER TABLE interview_sessions ADD COLUMN cv_text TEXT"
         ))
 
+    if "problem_statement" not in columns:
+        await conn.execute(text(
+            "ALTER TABLE interview_sessions ADD COLUMN problem_statement TEXT"
+        ))
+
+    if "full_problem" not in columns:
+        await conn.execute(text(
+            "ALTER TABLE interview_sessions ADD COLUMN full_problem TEXT"
+        ))
+
+    if "starter_code" not in columns:
+        await conn.execute(text(
+            "ALTER TABLE interview_sessions ADD COLUMN starter_code TEXT"
+        ))
+
+    if "test_cases" not in columns:
+        await conn.execute(text(
+            "ALTER TABLE interview_sessions ADD COLUMN test_cases TEXT"
+        ))
+
+    if "method_name" not in columns:
+        await conn.execute(text(
+            "ALTER TABLE interview_sessions ADD COLUMN method_name VARCHAR(200)"
+        ))
+
     if "prompt_tokens" not in columns:
         await conn.execute(text(
             "ALTER TABLE interview_sessions ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0"

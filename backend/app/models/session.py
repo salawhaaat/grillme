@@ -20,6 +20,11 @@ class InterviewSession(Base):
     prep_plan: Mapped[str | None] = mapped_column(Text, nullable=True)
     cv_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     problem_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    problem_statement: Mapped[str | None] = mapped_column(Text, nullable=True)
+    full_problem: Mapped[str | None] = mapped_column(Text, nullable=True)
+    starter_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    test_cases: Mapped[str | None] = mapped_column(Text, nullable=True)
+    method_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     scorecard: Mapped[str | None] = mapped_column(Text, nullable=True)
     messages: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
     prompt_tokens: Mapped[int] = mapped_column(default=0, server_default="0")

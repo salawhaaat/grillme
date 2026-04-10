@@ -137,3 +137,10 @@ class ScorecardV2(BaseModel):
     strengths: list[str]
     areas_to_improve: list[str]
     recommendation: str
+
+
+class InterviewPipelineResult(BaseModel):
+    parsed_jd: ParsedJD | None = None
+    problem: CodingProblem
+    persona: PersonaVoice
+    research: ResearchIntel | None = None
