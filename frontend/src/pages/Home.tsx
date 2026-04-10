@@ -4,6 +4,12 @@ import { api, type SessionInfo, type Difficulty } from "@/lib/api/client"
 import { cn } from "@/lib/utils"
 import { Sidebar } from "@/components/Sidebar"
 import { DIFFICULTY_PICKER_META } from "@/lib/constants/difficulty"
+import * as pdfjsLib from "pdfjs-dist"
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.min.mjs",
+  import.meta.url,
+).toString()
 
 type Step = "paste" | "confirm"
 type SourceTab = "jd" | "problem"
@@ -52,8 +58,10 @@ export default function Home() {
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null)
   const [showPrepPlan, setShowPrepPlan] = useState(true)
   const [fileDragging, setFileDragging] = useState(false)
+  const [cvDragging, setCvDragging] = useState(false)
   const [difficulty, setDifficulty] = useState<Difficulty>("medium")
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const cvInputRef = useRef<HTMLInputElement>(null)
 
   // Draggable talking head — starts top-right of the right panel
   const pip = useDraggable({ x: window.innerWidth - 320, y: 80 })
@@ -127,6 +135,82 @@ export default function Home() {
     } catch {
       textareaRef.current?.focus()
     }
+  }
+
+  function isSupportedCvFile(file: File): boolean {
+    const lower = file.name.toLowerCase()
+    return (
+      file.type.startsWith("text/") ||
+      file.type === "application/pdf" ||
+      lower.endsWith(".txt") ||
+      lower.endsWith(".md") ||
+      lower.endsWith(".pdf")
+    )
+  }
+
+  async function extractPdfText(file: File): Promise<string> {
+    const bytes = await file.arrayBuffer()
+    const loadingTask = pdfjsLib.getDocument({ data: bytes })
+    const pdf = await loadingTask.promise
+    const pagesToRead = Math.min(pdf.numPages, 20)
+    const chunks: string[] = []
+
+    for (let pageNumber = 1; pageNumber <= pagesToRead; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber)
+      const content = await page.getTextContent()
+      const text = content.items
+        .map((item) => ("str" in item ? item.str : ""))
+        .filter(Boolean)
+        .join(" ")
+      if (text.trim()) chunks.push(text.trim())
+    }
+    return chunks.join("\n")
+  }
+
+  async function readCvFile(file: File) {
+    if (!isSupportedCvFile(file)) {
+      setError("Unsupported CV format. Upload .txt or .md, or paste CV text.")
+      return
+    }
+    try {
+      const lower = file.name.toLowerCase()
+      const text =
+        file.type === "application/pdf" || lower.endsWith(".pdf")
+          ? await extractPdfText(file)
+          : await file.text()
+      if (!text.trim()) {
+        setError("Could not extract text from CV file.")
+        return
+      }
+      setCvText(text)
+      setError(null)
+    } catch {
+      setError("Failed to read CV file.")
+    }
+  }
+
+  async function handleCvFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    await readCvFile(file)
+    e.currentTarget.value = ""
+  }
+
+  function handleCvDragOver(e: React.DragEvent) {
+    e.preventDefault()
+    setCvDragging(true)
+  }
+
+  function handleCvDragLeave() {
+    setCvDragging(false)
+  }
+
+  async function handleCvDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setCvDragging(false)
+    const file = e.dataTransfer.files[0]
+    if (!file) return
+    await readCvFile(file)
   }
 
   return (
@@ -302,12 +386,49 @@ export default function Home() {
                     <p className="text-[10px] font-bold text-outline uppercase tracking-wider px-0.5">
                       CV / Resume (optional)
                     </p>
-                    <textarea
-                      value={cvText}
-                      onChange={(e) => setCvText(e.target.value)}
-                      placeholder="Paste resume highlights for personalized interview questions"
-                      className="w-full min-h-[88px] bg-transparent border border-outline-variant/30 rounded-xl px-3 py-2 text-xs text-on-surface placeholder:text-outline focus:outline-none focus:border-primary/50 resize-y"
-                    />
+                    <div
+                      className={cn(
+                        "w-full border rounded-xl transition-colors",
+                        cvDragging
+                          ? "border-primary bg-primary/5"
+                          : "border-outline-variant/30 bg-transparent",
+                      )}
+                      onDragOver={handleCvDragOver}
+                      onDragLeave={handleCvDragLeave}
+                      onDrop={handleCvDrop}
+                    >
+                      <textarea
+                        value={cvText}
+                        onChange={(e) => setCvText(e.target.value)}
+                        placeholder="Paste CV text, or drop/upload a .txt/.md CV file"
+                        className="w-full min-h-[88px] bg-transparent rounded-xl px-3 py-2 text-xs text-on-surface placeholder:text-outline focus:outline-none resize-y"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        ref={cvInputRef}
+                        type="file"
+                        accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
+                        className="hidden"
+                        onChange={handleCvFileChange}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => cvInputRef.current?.click()}
+                        className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-outline-variant/30 text-on-surface-variant hover:bg-surface-container-high transition-colors"
+                      >
+                        Upload CV (PDF/TXT/MD)
+                      </button>
+                      {cvText.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => setCvText("")}
+                          className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-outline-variant/30 text-outline hover:text-error hover:border-error/40 transition-colors"
+                        >
+                          Clear CV
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {error && (
