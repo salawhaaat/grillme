@@ -1,9 +1,12 @@
 from typing import AsyncIterator
+import asyncio
+import json
 from openai import AsyncOpenAI
 from google import genai
 from google.genai.errors import ClientError, ServerError
 from app.core.config import settings
 from app.core.logging import setup_logger
+from app.services.tools import TOOL_REGISTRY
 
 logger = setup_logger(__name__)
 
@@ -76,6 +79,62 @@ class LLMService:
             return await self._complete_gemini(messages)
         else:
             raise ValueError(f"Unknown provider: '{provider}'")
+
+    async def complete_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        max_tool_calls: int = 3,
+    ) -> str:
+        provider = settings.llm_provider
+        if provider == "gemini":
+            return await self.complete(messages)
+
+        if provider == "groq":
+            if not settings.groq_api_key:
+                raise ValueError("GROQ_API_KEY is not set in .env")
+            client = AsyncOpenAI(
+                api_key=settings.groq_api_key,
+                base_url="https://api.groq.com/openai/v1",
+            )
+        else:
+            if not settings.openai_api_key:
+                raise ValueError("OPENAI_API_KEY is not set in .env")
+            client = AsyncOpenAI(api_key=settings.openai_api_key)
+
+        convo = list(messages)
+        for _ in range(max_tool_calls):
+            kwargs: dict = dict(model=settings.llm_model, messages=convo)
+            if tools:
+                kwargs["tools"] = tools
+            response = await client.chat.completions.create(**kwargs)
+            msg = response.choices[0].message
+            if not msg.tool_calls:
+                return msg.content or ""
+
+            convo.append(msg.model_dump())
+            for tc in msg.tool_calls:
+                fn_name = tc.function.name
+                fn_args = json.loads(tc.function.arguments or "{}")
+                executor = TOOL_REGISTRY.get(fn_name)
+                if executor:
+                    try:
+                        result = await asyncio.wait_for(executor(**fn_args), timeout=15)
+                    except (asyncio.TimeoutError, Exception) as e:
+                        result = f"Tool execution failed: {e}"
+                else:
+                    result = f"Unknown tool: {fn_name}"
+                convo.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result,
+                })
+
+        final = await client.chat.completions.create(
+            model=settings.llm_model,
+            messages=convo,
+        )
+        return final.choices[0].message.content or ""
 
     async def _complete_compat(self, messages: list[dict], json_mode: bool = False) -> str:
         provider = settings.llm_provider
