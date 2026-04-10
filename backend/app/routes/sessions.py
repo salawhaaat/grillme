@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.logging import setup_logger
+from app.models.problem import Problem
 from app.models.session import InterviewSession
 from app.services.jd import JDService
 from app.services.llm import LLMService, RateLimitError, ProviderError
@@ -299,9 +300,27 @@ async def create_from_problem(
     body: FromProblemRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    problem = await scraper.scrape(body.problem_url)
-    if not problem:
-        raise HTTPException(422, "Could not scrape problem — check the URL")
+    cached = await db.execute(select(Problem).where(Problem.url == body.problem_url))
+    cached_problem = cached.scalar_one_or_none()
+    if cached_problem:
+        problem = {
+            "title": cached_problem.title,
+            "difficulty": cached_problem.difficulty,
+            "description": cached_problem.description,
+        }
+    else:
+        problem = await scraper.scrape(body.problem_url)
+        if not problem:
+            raise HTTPException(422, "Could not scrape problem — check the URL")
+
+        existing = await db.execute(select(Problem).where(Problem.url == body.problem_url))
+        if not existing.scalar_one_or_none():
+            db.add(Problem(
+                title=problem["title"],
+                difficulty=problem["difficulty"],
+                url=body.problem_url,
+                description=problem["description"],
+            ))
 
     try:
         persona = await jd_service.build_problem_persona(problem)
