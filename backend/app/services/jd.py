@@ -1,7 +1,6 @@
 import json
 import re
 from app.services.llm import LLMService
-from app.services.research import ResearchService
 from app.core.logging import setup_logger
 
 logger = setup_logger(__name__)
@@ -31,9 +30,8 @@ def detect_oa_platform(jd_raw: str) -> str | None:
 
 
 class JDService:
-    def __init__(self, llm: LLMService, research: ResearchService | None = None) -> None:
+    def __init__(self, llm: LLMService) -> None:
         self.llm = llm
-        self.research = research
 
     async def parse_jd(self, jd_raw: str) -> dict:
         """Step 1 — extract structured info from a raw job description."""
@@ -162,11 +160,3 @@ class JDService:
             },
         ]
         return await self.llm.complete(messages)
-
-    async def process_jd(self, jd_raw: str) -> tuple[dict, str, dict, str, str | None]:
-        """Deprecated: Use Orchestrator.run_jd_pipeline instead."""
-        raise NotImplementedError("Use Orchestrator.run_jd_pipeline instead")
-
-    async def generate_scorecard(self, messages: list[dict], persona: str) -> str:
-        """Deprecated: Use Orchestrator.run_scoring instead."""
-        raise NotImplementedError("Use Orchestrator.run_scoring instead")

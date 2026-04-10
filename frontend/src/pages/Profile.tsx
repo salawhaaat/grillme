@@ -62,7 +62,7 @@ export default function ProfilePage() {
         .map((s) => s.overall_score ?? 0),
     [finished],
   )
-  const topWeaknesses = useMemo(() => weaknesses.slice(0, 3), [weaknesses])
+  const topWeaknesses = useMemo(() => weaknesses.filter((w) => w.frequency >= 2).slice(0, 3), [weaknesses])
 
   function weaknessPillClass(freq: number) {
     if (freq >= 3) return "bg-error/20 border-error/40 text-error"
@@ -265,7 +265,7 @@ export default function ProfilePage() {
                   </h2>
                   {topWeaknesses.length === 0 ? (
                     <p className="text-sm text-on-surface-variant">
-                      Keep finishing interviews to get personalized focus recommendations.
+                      Keep finishing interviews to build stronger focus recommendations.
                     </p>
                   ) : (
                     <p className="text-sm text-on-surface-variant leading-relaxed">

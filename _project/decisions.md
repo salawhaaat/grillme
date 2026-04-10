@@ -104,3 +104,8 @@ Level 3 — Multi-Agent (Milestone 6)
 **Decision:** Split JDService into ParseAgent, PersonaAgent, ScorerAgent, MemoryAgent + Orchestrator
 **Why:** Each agent has a single responsibility, typed I/O via Pydantic, and can be tested/replaced independently. The Orchestrator composes them.
 **Trade-off:** More files and indirection than a single service class. Worth it for testability and the multi-agent pattern demonstration.
+
+## ADR-011 — Canonical memory taxonomy with deterministic fallback
+**Decision:** Store only canonical weakness tags (communication, problem solving, system design, time complexity, coding speed, debugging, leadership), normalize LLM tags into that taxonomy, and fall back to keyword-based extraction from scorecard text when LLM output is invalid/noisy.
+**Why:** Cross-session memory quality is more important than tag expressiveness. Canonical tags reduce drift/noise and produce stable profile recommendations.
+**Trade-off:** Less nuanced labels and some loss of specificity compared to free-form tags.

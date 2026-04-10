@@ -84,23 +84,6 @@ async def test_generate_question_bank_returns_structured_dict(jd_service, mock_l
     _, kwargs = mock_llm.complete.call_args
     assert kwargs.get("json_mode") is True
 
-
-async def test_process_jd_is_deprecated(jd_service):
-    with pytest.raises(NotImplementedError, match="Use Orchestrator.run_jd_pipeline instead"):
-        await jd_service.process_jd(JD_TEXT)
-
-
-async def test_generate_scorecard_is_deprecated(jd_service, mock_llm):
-    messages = [
-        {"role": "user", "content": "Tell me about yourself"},
-        {"role": "assistant", "content": "I have 5 years of Python experience."},
-    ]
-
-    with pytest.raises(NotImplementedError, match="Use Orchestrator.run_scoring instead"):
-        await jd_service.generate_scorecard(messages, "You are Alex from Stripe.")
-    mock_llm.complete.assert_not_called()
-
-
 async def test_build_problem_persona_returns_string(jd_service, mock_llm):
     mock_llm.complete.return_value = "You are Sam, a Google coding interviewer."
     problem = {"title": "Two Sum", "difficulty": "Easy"}
@@ -110,13 +93,3 @@ async def test_build_problem_persona_returns_string(jd_service, mock_llm):
     assert isinstance(result, str)
     assert len(result) > 0
     mock_llm.complete.assert_called_once()
-
-
-async def test_process_jd_raises_deprecated_even_with_research(mock_llm):
-    mock_research = AsyncMock()
-    mock_research.search = AsyncMock(side_effect=RuntimeError("research down"))
-    service = JDService(llm=mock_llm, research=mock_research)
-    with pytest.raises(NotImplementedError, match="Use Orchestrator.run_jd_pipeline instead"):
-        await service.process_jd(JD_TEXT)
-    mock_llm.complete.assert_not_called()
-    mock_research.search.assert_not_called()

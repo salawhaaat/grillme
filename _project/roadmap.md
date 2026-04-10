@@ -63,6 +63,7 @@
 - [x] ParseAgent, PersonaAgent, ScorerAgent, MemoryAgent
 - [x] Orchestrator pipeline replacing JDService.process_jd()
 - [x] Cross-session memory — UserMemory model, weakness tracking
+- [x] Memory hardening — canonical weakness taxonomy + deterministic fallback extraction
 - [x] Frontend: Profile page learning insights + score trends
 
 ## Milestone 8 — Code Execution

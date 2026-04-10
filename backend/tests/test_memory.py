@@ -75,7 +75,28 @@ async def test_memory_agent_extract_weaknesses_returns_tags():
     )
 
     tags = await agent.extract_weaknesses(scorecard)
-    assert tags == ["system design trade-offs", "time complexity analysis"]
+    assert tags == ["system design", "time complexity"]
+
+
+async def test_memory_agent_extract_weaknesses_fallbacks_to_deterministic_mapping():
+    from app.agents.memory import MemoryAgent
+    from app.services.llm import LLMService
+
+    llm = AsyncMock(spec=LLMService)
+    llm.complete.return_value = "not-json"
+    agent = MemoryAgent(llm=llm)
+    scorecard = ScorecardResult(
+        overall_score=6,
+        strengths=["clarity"],
+        areas_to_improve=[
+            "Needs stronger communication in behavioral STAR responses",
+            "Improve system design trade-offs and scalability reasoning",
+        ],
+        recommendation="hire",
+    )
+
+    tags = await agent.extract_weaknesses(scorecard)
+    assert tags == ["communication", "system design"]
 
 
 def test_create_from_jd_passes_existing_weaknesses_to_pipeline(client):

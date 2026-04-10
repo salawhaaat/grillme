@@ -8,6 +8,6 @@ so that each new session's prep plan targets my actual gaps.
 ## Acceptance Criteria
 - [ ] JD pipeline uses specialized agents (Parser → Persona → Scorer)
 - [ ] Agents communicate via typed Pydantic schemas
-- [ ] After each scored interview, weak areas are extracted and stored
+- [ ] After each scored interview, weak areas are extracted, normalized to canonical tags, and stored
 - [ ] Next session's prep plan references stored weaknesses
-- [ ] Profile page shows tracked weak areas and score trends
+- [ ] Profile page shows tracked weak areas and score trends, with recommendations gated by repeated signals
