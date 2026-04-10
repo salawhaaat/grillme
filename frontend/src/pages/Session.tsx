@@ -71,14 +71,19 @@ export default function SessionPage() {
   async function handleRunCode() {
     if (!code.trim()) return
     setRunning(true)
-    setError(null)
+    setTerminalTab("console")
     try {
-      const res = await api.runCode(code)
-      setRunResult(res)
-      setTerminalTab("console")
-      await api.shareCode(sessionId, code, res, testResult)
+      const result = await api.runCode(code)
+      setRunResult(result)
+      api.shareCode(sessionId, code, result, undefined).catch(() => {})
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to run code")
+      setRunResult({
+        stdout: "",
+        stderr: e instanceof Error ? e.message : "Error",
+        exit_code: -1,
+        runtime_ms: 0,
+        timed_out: false,
+      })
     } finally {
       setRunning(false)
     }
@@ -87,16 +92,25 @@ export default function SessionPage() {
   async function handleRunTests() {
     if (!code.trim() || !session?.test_cases) return
     setRunning(true)
-    setError(null)
+    setTerminalTab("tests")
     try {
-      const res = await api.runTests(sessionId, code)
-      setTestResult(res)
-      setTerminalTab("tests")
-      await api.shareCode(sessionId, code, runResult, res)
+      const result = await api.runTests(code, sessionId)
+      setTestResult(result)
+      api.shareCode(sessionId, code, undefined, result).catch(() => {})
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to run tests")
+      console.error(e)
     } finally {
       setRunning(false)
+    }
+  }
+
+  function handleEditorKeyDown(e: React.KeyboardEvent) {
+    if (!(e.metaKey || e.ctrlKey) || e.key !== "Enter") return
+    e.preventDefault()
+    if (e.shiftKey) {
+      void handleRunTests()
+    } else {
+      void handleRunCode()
     }
   }
 
@@ -205,20 +219,22 @@ export default function SessionPage() {
             </div>
 
             <div className="h-[70%] border-b border-border">
-              <Editor
-                height="100%"
-                defaultLanguage="python"
-                theme="vs-dark"
-                value={code}
-                onChange={(v) => setCode(v ?? "")}
-                options={{
-                  fontSize: 13,
-                  minimap: { enabled: false },
-                  lineNumbers: "on",
-                  scrollBeyondLastLine: false,
-                  automaticLayout: true,
-                }}
-              />
+              <div onKeyDown={handleEditorKeyDown} className="h-full">
+                <Editor
+                  height="100%"
+                  defaultLanguage="python"
+                  theme="vs-dark"
+                  value={code}
+                  onChange={(v) => setCode(v ?? "")}
+                  options={{
+                    fontSize: 13,
+                    minimap: { enabled: false },
+                    lineNumbers: "on",
+                    scrollBeyondLastLine: false,
+                    automaticLayout: true,
+                  }}
+                />
+              </div>
             </div>
 
             <div className="h-[30%] flex flex-col">
@@ -250,29 +266,38 @@ export default function SessionPage() {
                 {terminalTab === "console" ? (
                   runResult ? (
                     <div className="space-y-2">
-                      {runResult.stdout && <pre className="whitespace-pre-wrap text-green-400">{runResult.stdout}</pre>}
-                      {runResult.stderr && <pre className="whitespace-pre-wrap text-red-400">{runResult.stderr}</pre>}
+                      {runResult.timed_out && (
+                        <div className="rounded-md border border-yellow-500/40 bg-yellow-500/10 px-2 py-1 text-yellow-300">
+                          Execution timed out (10s limit)
+                        </div>
+                      )}
+                      {runResult.stdout && <pre className="whitespace-pre-wrap text-on-surface">{runResult.stdout}</pre>}
+                      {runResult.stderr && <pre className="whitespace-pre-wrap text-error">{runResult.stderr}</pre>}
                       {!runResult.stdout && !runResult.stderr && (
                         <p className="text-outline">No output.</p>
                       )}
+                      <p className="text-on-surface-variant">Exit: {runResult.exit_code} · {runResult.runtime_ms}ms</p>
                     </div>
                   ) : (
                     <p className="text-outline">Run your code to see output</p>
                   )
                 ) : testResult ? (
                   <div className="space-y-2">
-                    <p className="text-on-surface-variant">
-                      {testResult.passed}/{testResult.total} passed ({testResult.runtime_ms}ms)
+                    <p className="text-on-surface-variant font-semibold">
+                      {testResult.passed}/{testResult.total} passed · {testResult.runtime_ms}ms
                     </p>
                     {testResult.results.map((r) => (
                       <div key={r.id} className={cn("rounded-md px-2 py-1", r.passed ? "bg-green-500/10" : "bg-red-500/10")}>
                         <p className={cn("font-semibold", r.passed ? "text-green-400" : "text-red-400")}>
                           {r.passed ? "✓" : "✗"} Test {r.id}
                         </p>
-                        <p className="text-on-surface-variant">
-                          expected {r.expected}, got {r.actual || "error"}
-                        </p>
-                        {r.error && <p className="text-red-400">{r.error}</p>}
+                        {r.error ? (
+                          <p className="text-red-400">input={r.input} → error: {r.error}</p>
+                        ) : (
+                          <p className="text-on-surface-variant">
+                            input={r.input} → expected {r.expected}, got {r.actual}
+                          </p>
+                        )}
                       </div>
                     ))}
                   </div>

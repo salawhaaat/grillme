@@ -210,8 +210,8 @@ export const api = {
   runCode: (code: string, stdin_input = "") =>
     post<RunResult>("/code/run", { code, stdin_input }),
 
-  runTests: (session_id: number, code: string) =>
-    post<TestResult>("/code/test", { session_id, code }),
+  runTests: (code: string, session_id: number) =>
+    post<TestResult>("/code/test", { code, session_id }),
 
   shareCode: (
     session_id: number,
@@ -258,7 +258,7 @@ export interface TestCaseResult {
   input: string
   expected: string
   actual: string
-  error?: string | null
+  error: string | null
 }
 
 export interface TestResult {
