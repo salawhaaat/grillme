@@ -85,50 +85,20 @@ async def test_generate_question_bank_returns_structured_dict(jd_service, mock_l
     assert kwargs.get("json_mode") is True
 
 
-async def test_process_jd_parallelizes_after_parse(jd_service, mock_llm):
-    """parse_jd runs first; then persona, question_bank, prep_plan run in parallel (4 LLM calls)."""
-    bank = {"warmup": ["Tell me about yourself"], "trivia": ["What is a kernel panic?"],
-            "culture_fit": ["Tell me about a hard bug"], "coding": {"type": "system_design",
-            "topic": "Design CI/CD", "hints": []}}
-    mock_llm.complete.side_effect = [
-        json.dumps(PARSED_JD),           # parse_jd
-        "You are Alex, a Stripe engineer.",  # build_persona  (gathered)
-        json.dumps(bank),                # generate_question_bank (gathered)
-        "1. Study system design\n2. Practice algorithms",  # generate_prep_plan (gathered)
-    ]
-
-    parsed, persona, question_bank, prep_plan, oa_platform = await jd_service.process_jd(JD_TEXT)
-
-    assert parsed["company"] == "Stripe"
-    assert "Alex" in persona
-    assert "warmup" in question_bank
-    assert "system design" in prep_plan
-    assert oa_platform is None
-    assert mock_llm.complete.call_count == 4
+async def test_process_jd_is_deprecated(jd_service):
+    with pytest.raises(NotImplementedError, match="Use Orchestrator.run_jd_pipeline instead"):
+        await jd_service.process_jd(JD_TEXT)
 
 
-async def test_generate_scorecard_uses_reflection(jd_service, mock_llm):
-    """generate_scorecard makes 2 LLM calls: draft then reflect/refine."""
-    scorecard = {"overall_score": 8, "strengths": ["clear thinking"],
-                 "areas_to_improve": ["depth"], "recommendation": "hire"}
-    mock_llm.complete.side_effect = [
-        json.dumps(scorecard),   # draft
-        json.dumps({**scorecard, "overall_score": 7}),  # reflection-refined
-    ]
+async def test_generate_scorecard_is_deprecated(jd_service, mock_llm):
     messages = [
         {"role": "user", "content": "Tell me about yourself"},
         {"role": "assistant", "content": "I have 5 years of Python experience."},
     ]
 
-    result = await jd_service.generate_scorecard(messages, "You are Alex from Stripe.")
-
-    assert mock_llm.complete.call_count == 2
-    parsed = json.loads(result)
-    assert "overall_score" in parsed
-    # Both calls must use json_mode
-    for call in mock_llm.complete.call_args_list:
-        _, kwargs = call
-        assert kwargs.get("json_mode") is True
+    with pytest.raises(NotImplementedError, match="Use Orchestrator.run_scoring instead"):
+        await jd_service.generate_scorecard(messages, "You are Alex from Stripe.")
+    mock_llm.complete.assert_not_called()
 
 
 async def test_build_problem_persona_returns_string(jd_service, mock_llm):
@@ -142,28 +112,11 @@ async def test_build_problem_persona_returns_string(jd_service, mock_llm):
     mock_llm.complete.assert_called_once()
 
 
-async def test_process_jd_ignores_research_failure(mock_llm):
+async def test_process_jd_raises_deprecated_even_with_research(mock_llm):
     mock_research = AsyncMock()
     mock_research.search = AsyncMock(side_effect=RuntimeError("research down"))
     service = JDService(llm=mock_llm, research=mock_research)
-
-    bank = {
-        "warmup": ["Tell me about yourself"],
-        "trivia": ["Explain CAP theorem"],
-        "culture_fit": ["Describe a conflict"],
-        "coding": {"type": "system_design", "topic": "Design CI/CD", "hints": []},
-    }
-    mock_llm.complete.side_effect = [
-        json.dumps(PARSED_JD),
-        "You are Alex, a Stripe engineer.",
-        json.dumps(bank),
-        "1. Study system design\n2. Practice algorithms",
-    ]
-
-    parsed, persona, question_bank, prep_plan, oa_platform = await service.process_jd(JD_TEXT)
-
-    assert parsed["company"] == "Stripe"
-    assert "Alex" in persona
-    assert "warmup" in question_bank
-    assert "system design" in prep_plan
-    assert oa_platform is None
+    with pytest.raises(NotImplementedError, match="Use Orchestrator.run_jd_pipeline instead"):
+        await service.process_jd(JD_TEXT)
+    mock_llm.complete.assert_not_called()
+    mock_research.search.assert_not_called()

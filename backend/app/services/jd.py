@@ -1,4 +1,3 @@
-import asyncio
 import json
 import re
 from app.services.llm import LLMService
@@ -165,74 +164,9 @@ class JDService:
         return await self.llm.complete(messages)
 
     async def process_jd(self, jd_raw: str) -> tuple[dict, str, dict, str, str | None]:
-        """Parallelization: parse JD, then gather persona + question bank + prep plan concurrently."""
-        parsed = await self.parse_jd(jd_raw)
-        tasks = [
-            self.build_persona(parsed),
-            self.generate_question_bank(parsed),
-            self.generate_prep_plan(parsed),
-        ]
-        if self.research:
-            tasks.append(self.research.search(parsed.get("company", ""), parsed.get("role", "")))
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        if len(results) < 3 or any(isinstance(r, Exception) for r in results[:3]):
-            first_exception = next((r for r in results if isinstance(r, Exception)), RuntimeError("JD pipeline failed"))
-            raise first_exception
-
-        persona = results[0]
-        question_bank = results[1]
-        prep_plan = results[2]
-        oa_platform = detect_oa_platform(jd_raw)
-        return parsed, persona, question_bank, prep_plan, oa_platform
+        """Deprecated: Use Orchestrator.run_jd_pipeline instead."""
+        raise NotImplementedError("Use Orchestrator.run_jd_pipeline instead")
 
     async def generate_scorecard(self, messages: list[dict], persona: str) -> str:
-        """Reflection pattern: draft scorecard → self-critique → refined final."""
-        transcript = "\n".join(
-            f"{m['role'].upper()}: {m['content']}" for m in messages
-        )
-
-        # Step 1 — draft
-        draft = await self.llm.complete(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        f"{persona}\n\n"
-                        "You just finished a mock interview. Score the candidate and return "
-                        "ONLY valid JSON with: overall_score (int 1-10), "
-                        "strengths (list of strings), areas_to_improve (list of strings), "
-                        "recommendation (string: hire/no_hire/strong_hire)."
-                    ),
-                },
-                {"role": "user", "content": f"Interview transcript:\n\n{transcript}"},
-            ],
-            json_mode=True,
-        )
-
-        # Step 2 — reflect and refine
-        refined = await self.llm.complete(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a calibration reviewer for interview scorecards. "
-                        "You will receive a draft scorecard and the original interview transcript. "
-                        "Check for: score inflation/deflation, missed strengths, missed weaknesses, "
-                        "inconsistency between scores and evidence. "
-                        "Return an improved version as ONLY valid JSON with the same keys: "
-                        "overall_score (int 1-10), strengths (list), areas_to_improve (list), "
-                        "recommendation (hire/no_hire/strong_hire)."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Draft scorecard:\n{draft}\n\n"
-                        f"Interview transcript:\n{transcript}"
-                    ),
-                },
-            ],
-            json_mode=True,
-        )
-        return refined
+        """Deprecated: Use Orchestrator.run_scoring instead."""
+        raise NotImplementedError("Use Orchestrator.run_scoring instead")
