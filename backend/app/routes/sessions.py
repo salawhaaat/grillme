@@ -100,7 +100,10 @@ def _build_system_prompt(session: InterviewSession) -> str:
         f"2. Technical trivia (4 questions): {' | '.join(qb.get('trivia', []))}\n"
         f"3. Culture fit (2 questions): {' | '.join(qb.get('culture_fit', []))}\n"
         f"4. {coding_line}\n\n"
-        "Progress through sections naturally. Do not skip sections."
+        "5. Closing: ask the candidate 'Do you have any questions for me?' and discuss their questions.\n\n"
+        "Progress through sections naturally. Do not skip sections. "
+        "In the closing part, encourage strong candidate-style questions that show curiosity about "
+        "the team, the problems they are solving, and what matters most in the role."
     )
     return base + structure
 

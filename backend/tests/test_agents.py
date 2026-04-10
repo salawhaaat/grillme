@@ -195,3 +195,30 @@ async def test_scorer_agent_makes_two_llm_calls():
     )
 
     assert llm.complete.await_count == 2
+
+
+async def test_scorer_agent_prompt_mentions_thought_process_and_closing_questions():
+    llm = AsyncMock(spec=LLMService)
+    llm.complete.side_effect = [
+        json.dumps({
+            "overall_score": 7,
+            "strengths": ["clarity"],
+            "areas_to_improve": ["depth"],
+            "recommendation": "hire",
+        }),
+        json.dumps({
+            "overall_score": 8,
+            "strengths": ["clarity"],
+            "areas_to_improve": ["depth"],
+            "recommendation": "hire",
+        }),
+    ]
+    agent = ScorerAgent(llm=llm)
+
+    await agent.run(
+        ScorerInput(messages=[{"role": "user", "content": "Hello"}], persona="You are Alex")
+    )
+
+    first_system_prompt = llm.complete.call_args_list[0].args[0][0]["content"].lower()
+    assert "thought process" in first_system_prompt
+    assert "closing-stage interview behavior" in first_system_prompt

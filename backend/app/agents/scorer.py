@@ -22,7 +22,11 @@ class ScorerAgent(BaseAgent):
                         "You just finished a mock interview. Score the candidate and return "
                         "ONLY valid JSON with: overall_score (int 1-10), "
                         "strengths (list of strings), areas_to_improve (list of strings), "
-                        "recommendation (string: hire/no_hire/strong_hire)."
+                        "recommendation (string: hire/no_hire/strong_hire). "
+                        "Evaluate the candidate's thought process while solving problems "
+                        "(clarity, trade-offs, debugging path, communication). "
+                        "Also evaluate closing-stage interview behavior: quality of questions asked "
+                        "about team, product/problem space, and priorities/care-abouts."
                     ),
                 },
                 {"role": "user", "content": f"Interview transcript:\n\n{transcript}"},
@@ -38,7 +42,8 @@ class ScorerAgent(BaseAgent):
                         "You are a calibration reviewer for interview scorecards. "
                         "You will receive a draft scorecard and the original interview transcript. "
                         "Check for: score inflation/deflation, missed strengths, missed weaknesses, "
-                        "inconsistency between scores and evidence. "
+                        "inconsistency between scores and evidence, missing evaluation of thought process, "
+                        "and missing closing-stage question quality. "
                         "Return an improved version as ONLY valid JSON with the same keys: "
                         "overall_score (int 1-10), strengths (list), areas_to_improve (list), "
                         "recommendation (hire/no_hire/strong_hire)."

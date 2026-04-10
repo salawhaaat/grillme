@@ -388,7 +388,7 @@ export default function Home() {
                     </p>
                     <div
                       className={cn(
-                        "w-full border rounded-xl transition-colors",
+                        "w-full border rounded-xl transition-colors relative overflow-hidden",
                         cvDragging
                           ? "border-primary bg-primary/5"
                           : "border-outline-variant/30 bg-transparent",
@@ -396,13 +396,20 @@ export default function Home() {
                       onDragOver={handleCvDragOver}
                       onDragLeave={handleCvDragLeave}
                       onDrop={handleCvDrop}
+                      onClick={() => cvInputRef.current?.click()}
                     >
                       <textarea
                         value={cvText}
                         onChange={(e) => setCvText(e.target.value)}
-                        placeholder="Paste CV text, or drop/upload a .txt/.md CV file"
+                        placeholder="Paste CV text, or drag/drop/click to upload PDF/TXT/MD"
                         className="w-full min-h-[88px] bg-transparent rounded-xl px-3 py-2 text-xs text-on-surface placeholder:text-outline focus:outline-none resize-y"
                       />
+                      {!cvText.trim() && (
+                        <div className="pointer-events-none absolute right-3 top-2 text-[10px] text-outline flex items-center gap-1">
+                          <span className="material-symbols-outlined text-sm">upload_file</span>
+                          Drop or click
+                        </div>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <input
@@ -412,13 +419,6 @@ export default function Home() {
                         className="hidden"
                         onChange={handleCvFileChange}
                       />
-                      <button
-                        type="button"
-                        onClick={() => cvInputRef.current?.click()}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-outline-variant/30 text-on-surface-variant hover:bg-surface-container-high transition-colors"
-                      >
-                        Upload CV (PDF/TXT/MD)
-                      </button>
                       {cvText.trim() && (
                         <button
                           type="button"

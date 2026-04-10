@@ -184,3 +184,21 @@ def test_well_done_mode_system_prompt_contains_no_hints_instruction(client):
     assert captured, "stream_chat was never called"
     assert any(kw in captured[0].lower() for kw in ("never", "no hint", "fail")), \
         f"Expected strict instruction in well_done prompt, got: {captured[0][:300]}"
+
+
+def test_system_prompt_includes_closing_questions_instruction(client):
+    sid = _create_session(client, "medium")
+    captured: list[str] = []
+
+    async def fake_stream(_self, messages, **__):
+        system = next((m["content"] for m in messages if m["role"] == "system"), "")
+        captured.append(system)
+        yield "ok"
+
+    with patch("app.services.llm.LLMService.stream_chat", new=fake_stream):
+        client.post(f"/api/sessions/{sid}/message", json={"content": "Let's continue"})
+
+    assert captured, "stream_chat was never called"
+    text = captured[0].lower()
+    assert "do you have any questions for me" in text
+    assert "curiosity about the team" in text
