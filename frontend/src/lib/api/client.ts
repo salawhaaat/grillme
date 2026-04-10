@@ -80,7 +80,7 @@ export interface SessionListItem {
 }
 
 export interface Message {
-  role: "user" | "assistant"
+  role: "user" | "assistant" | "system"
   content: string
 }
 
@@ -206,6 +206,20 @@ export const api = {
     }
     return { scorecard: normalized }
   },
+
+  runCode: (code: string, stdin_input = "") =>
+    post<RunResult>("/code/run", { code, stdin_input }),
+
+  runTests: (session_id: number, code: string) =>
+    post<TestResult>("/code/test", { session_id, code }),
+
+  shareCode: (
+    session_id: number,
+    code: string,
+    run_result?: RunResult | null,
+    test_result?: TestResult | null,
+  ) =>
+    post<{ ok: boolean }>("/code/share", { session_id, code, run_result: run_result ?? undefined, test_result: test_result ?? undefined }),
 }
 
 export async function* streamMessage(
@@ -228,4 +242,29 @@ export async function* streamMessage(
     if (done) break
     yield decoder.decode(value, { stream: true })
   }
+}
+
+export interface RunResult {
+  stdout: string
+  stderr: string
+  exit_code: number
+  runtime_ms: number
+  timed_out: boolean
+}
+
+export interface TestCaseResult {
+  id: number
+  passed: boolean
+  input: string
+  expected: string
+  actual: string
+  error?: string | null
+}
+
+export interface TestResult {
+  passed: number
+  failed: number
+  total: number
+  results: TestCaseResult[]
+  runtime_ms: number
 }
