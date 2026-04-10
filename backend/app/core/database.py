@@ -46,6 +46,26 @@ async def _run_migrations(conn: AsyncConnection) -> None:
             "ALTER TABLE interview_sessions ADD COLUMN oa_platform VARCHAR(100)"
         ))
 
+    if "cv_text" not in columns:
+        await conn.execute(text(
+            "ALTER TABLE interview_sessions ADD COLUMN cv_text TEXT"
+        ))
+
+    if "prompt_tokens" not in columns:
+        await conn.execute(text(
+            "ALTER TABLE interview_sessions ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0"
+        ))
+
+    if "completion_tokens" not in columns:
+        await conn.execute(text(
+            "ALTER TABLE interview_sessions ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0"
+        ))
+
+    if "total_tokens" not in columns:
+        await conn.execute(text(
+            "ALTER TABLE interview_sessions ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0"
+        ))
+
 
 async def init_db() -> None:
     async with engine.begin() as conn:

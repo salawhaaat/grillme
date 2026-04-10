@@ -18,8 +18,12 @@ class InterviewSession(Base):
     persona: Mapped[str | None] = mapped_column(Text, nullable=True)
     question_bank: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     prep_plan: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cv_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     problem_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     scorecard: Mapped[str | None] = mapped_column(Text, nullable=True)
     messages: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
+    prompt_tokens: Mapped[int] = mapped_column(default=0, server_default="0")
+    completion_tokens: Mapped[int] = mapped_column(default=0, server_default="0")
+    total_tokens: Mapped[int] = mapped_column(default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

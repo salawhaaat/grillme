@@ -88,6 +88,27 @@ def test_create_session_from_jd(client):
     assert data["opening_message"] == OPENING
 
 
+def test_create_session_from_jd_with_cv(client):
+    async def fake_complete(*_, **__):
+        return OPENING
+
+    with patch("app.routes.sessions.orchestrator") as mock_orch, \
+         patch("app.services.llm.LLMService.complete", new=fake_complete):
+        mock_orch.run_jd_pipeline = AsyncMock(return_value=_pipeline_result())
+        resp = client.post(
+            "/api/sessions/from-jd",
+            json={"jd": JD_TEXT, "cv_text": "Built distributed payment service at Acme."},
+        )
+
+    assert resp.status_code == 200
+    sid = resp.json()["session_id"]
+    session_resp = client.get(f"/api/sessions/{sid}")
+    assert session_resp.status_code == 200
+    data = session_resp.json()
+    assert data["cv_text"] == "Built distributed payment service at Acme."
+    assert data["total_tokens"] > 0
+
+
 def test_create_session_missing_jd_field(client):
     resp = client.post("/api/sessions/from-jd", json={})
     assert resp.status_code == 422
@@ -105,6 +126,7 @@ def test_get_session(client):
     assert data["company"] == "Stripe"
     # opening message is pre-saved as first assistant message
     assert data["messages"][0] == {"role": "assistant", "content": OPENING}
+    assert data["total_tokens"] >= 0
 
 
 def test_get_session_not_found(client):
@@ -142,6 +164,7 @@ def test_send_message_saves_messages_to_db(client):
     assert msgs[0] == {"role": "assistant", "content": OPENING}
     assert msgs[1] == {"role": "user", "content": "Hi"}
     assert msgs[2] == {"role": "assistant", "content": "Tell me about yourself."}
+    assert resp.json()["total_tokens"] > 0
 
 
 def test_send_message_session_not_found(client):
@@ -174,3 +197,36 @@ def test_finish_session(client):
 def test_finish_session_not_found(client):
     resp = client.post("/api/sessions/9999/finish")
     assert resp.status_code == 404
+
+
+# --- DELETE /api/sessions/{id} ---
+
+def test_delete_session(client):
+    session_id = _create_session(client)
+
+    resp = client.delete(f"/api/sessions/{session_id}")
+    assert resp.status_code == 200
+    assert resp.json()["deleted_session_id"] == session_id
+
+    missing = client.get(f"/api/sessions/{session_id}")
+    assert missing.status_code == 404
+
+
+def test_delete_session_not_found(client):
+    resp = client.delete("/api/sessions/9999")
+    assert resp.status_code == 404
+
+
+# --- DELETE /api/sessions/ ---
+
+def test_clear_sessions_history(client):
+    _create_session(client)
+    _create_session(client)
+
+    resp = client.delete("/api/sessions/")
+    assert resp.status_code == 200
+    assert resp.json()["deleted_sessions"] == 2
+
+    list_resp = client.get("/api/sessions/")
+    assert list_resp.status_code == 200
+    assert list_resp.json() == []

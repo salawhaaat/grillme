@@ -29,8 +29,12 @@ export interface Session {
   level: string | null
   persona: string | null
   prep_plan: string | null
+  cv_text: string | null
   problem_url: string | null
   scorecard: Scorecard | null
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
   messages: Message[]
   created_at: string
   finished_at: string | null
@@ -44,6 +48,7 @@ export interface SessionListItem {
   role: string | null
   level: string | null
   overall_score: number | null
+  total_tokens: number
   message_count: number
   created_at: string
   finished_at: string | null
@@ -74,6 +79,14 @@ export interface UserWeakness {
   last_session_id: number | null
 }
 
+type RawScorecard = Partial<Scorecard> & {
+  overall_score?: number
+  strengths?: string[]
+  improvements?: string[]
+  areas_to_improve?: string[]
+  recommendation?: string
+}
+
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
@@ -96,9 +109,44 @@ async function get<T>(path: string): Promise<T> {
   return res.json()
 }
 
+async function del<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { method: "DELETE" })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+function normalizeScorecard(raw: RawScorecard | null): Scorecard | null {
+  if (!raw || typeof raw.overall_score !== "number") return null
+  const improvements = raw.improvements ?? raw.areas_to_improve ?? []
+  const summary =
+    raw.summary ??
+    (raw.recommendation ? `Recommendation: ${raw.recommendation.replace(/_/g, " ")}` : "Interview completed.")
+  return {
+    overall_score: raw.overall_score,
+    summary,
+    strengths: Array.isArray(raw.strengths) ? raw.strengths : [],
+    improvements: Array.isArray(improvements) ? improvements : [],
+    sections: Array.isArray(raw.sections) ? raw.sections : [],
+  }
+}
+
+function normalizeSession(session: Session): Session {
+  return {
+    ...session,
+    scorecard: normalizeScorecard(session.scorecard as RawScorecard | null),
+  }
+}
+
 export const api = {
-  createSessionFromJD: (jd: string, difficulty: Difficulty = "medium") =>
-    post<SessionInfo>("/sessions/from-jd", { jd, difficulty: difficulty }),
+  createSessionFromJD: (
+    jd: string,
+    difficulty: Difficulty = "medium",
+    cv_text?: string,
+  ) =>
+    post<SessionInfo>("/sessions/from-jd", { jd, difficulty, cv_text }),
 
   createFromProblem: (problem_url: string, difficulty: Difficulty = "medium") =>
     post<ProblemSessionInfo>("/sessions/from-problem", { problem_url, difficulty }),
@@ -106,14 +154,26 @@ export const api = {
   listSessions: () =>
     get<SessionListItem[]>("/sessions/"),
 
-  getSession: (id: number) =>
-    get<Session>(`/sessions/${id}`),
+  getSession: async (id: number) =>
+    normalizeSession(await get<Session>(`/sessions/${id}`)),
 
   getUserMemory: () =>
     get<UserWeakness[]>("/sessions/memory"),
 
-  finishSession: (id: number) =>
-    post<{ scorecard: Scorecard }>(`/sessions/${id}/finish`, {}),
+  deleteSession: (id: number) =>
+    del<{ deleted_session_id: number }>(`/sessions/${id}`),
+
+  clearSessionsHistory: () =>
+    del<{ deleted_sessions: number; deleted_memory_rows: number }>("/sessions/"),
+
+  finishSession: async (id: number) => {
+    const res = await post<{ scorecard: RawScorecard }>(`/sessions/${id}/finish`, {})
+    const normalized = normalizeScorecard(res.scorecard)
+    if (!normalized) {
+      throw new Error("Invalid scorecard payload")
+    }
+    return { scorecard: normalized }
+  },
 }
 
 export async function* streamMessage(

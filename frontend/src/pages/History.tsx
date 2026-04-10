@@ -19,10 +19,11 @@ function ScoreBadge({ score }: { score: number | null }) {
   )
 }
 
-function SessionCard({ session, onClick, onFeedback }: {
+function SessionCard({ session, onClick, onFeedback, onDelete }: {
   session: SessionListItem
   onClick: () => void
   onFeedback: () => void
+  onDelete: () => void
 }) {
   const diff = DIFFICULTY_META[session.difficulty]
   const date = new Date(session.created_at).toLocaleDateString("en-US", {
@@ -99,6 +100,12 @@ function SessionCard({ session, onClick, onFeedback }: {
             >
               {isFinished ? "Review" : "Continue"}
             </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onDelete() }}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-error/30 text-error hover:bg-error/10 transition-colors"
+            >
+              Delete
+            </button>
           </div>
         </div>
       </div>
@@ -110,6 +117,7 @@ export default function HistoryPage() {
   const navigate = useNavigate()
   const [sessions, setSessions] = useState<SessionListItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     api.listSessions()
@@ -128,6 +136,28 @@ export default function HistoryPage() {
     finished.length ? Math.max(...finished.map((s) => s.overall_score ?? 0)) : null,
     [finished]
   )
+
+  async function deleteSession(id: number) {
+    if (!window.confirm("Delete this session? This action cannot be undone.")) return
+    setBusy(true)
+    try {
+      await api.deleteSession(id)
+      setSessions((prev) => prev.filter((s) => s.id !== id))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function clearHistory() {
+    if (!window.confirm("Clear all interview history and tracked memory? This cannot be undone.")) return
+    setBusy(true)
+    try {
+      await api.clearSessionsHistory()
+      setSessions([])
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
     <div className="h-screen overflow-hidden flex flex-col bg-background">
@@ -153,13 +183,22 @@ export default function HistoryPage() {
         <main className="flex-1 overflow-y-auto no-scrollbar p-6">
           <div className="max-w-3xl mx-auto space-y-6">
             {/* Page title */}
-            <div>
-              <h1 className="text-2xl font-headline font-extrabold tracking-tight text-on-surface">
-                Interview History
-              </h1>
-              <p className="text-sm text-on-surface-variant mt-1">
-                All your past sessions and scores.
-              </p>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h1 className="text-2xl font-headline font-extrabold tracking-tight text-on-surface">
+                  Interview History
+                </h1>
+                <p className="text-sm text-on-surface-variant mt-1">
+                  All your past sessions and scores.
+                </p>
+              </div>
+              <button
+                onClick={clearHistory}
+                disabled={busy || sessions.length === 0}
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-error/30 text-error hover:bg-error/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                Clear history
+              </button>
             </div>
 
             {/* Stats */}
@@ -210,6 +249,7 @@ export default function HistoryPage() {
                     session={s}
                     onClick={() => navigate(s.finished_at ? `/session/${s.id}/scorecard` : `/session/${s.id}`)}
                     onFeedback={() => navigate(`/session/${s.id}/feedback`)}
+                    onDelete={() => deleteSession(s.id)}
                   />
                 ))}
               </div>

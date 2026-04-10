@@ -371,6 +371,9 @@ export default function SessionPage() {
                 <button className="p-1.5 text-outline hover:text-on-surface transition-colors">
                   <span className="material-symbols-outlined text-lg">format_align_left</span>
                 </button>
+                <span className="px-2 py-1 rounded-lg text-[10px] font-semibold border border-outline-variant/30 text-on-surface-variant bg-surface-container-highest">
+                  Tokens: {session?.total_tokens ?? 0}
+                </span>
               </div>
             </div>
 
@@ -399,6 +402,14 @@ export default function SessionPage() {
                         ))}
                     </ol>
                   )}
+                </div>
+              )}
+              {session?.cv_text && (
+                <div className="bg-surface-container rounded-xl border border-outline-variant/20">
+                  <p className="px-4 pt-3 text-sm font-semibold text-on-surface">CV Context</p>
+                  <p className="px-4 pb-4 text-xs text-on-surface-variant whitespace-pre-wrap leading-relaxed">
+                    {session.cv_text}
+                  </p>
                 </div>
               )}
 

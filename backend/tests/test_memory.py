@@ -149,3 +149,29 @@ def test_finishing_two_sessions_increments_frequency(client):
     memory = client.get("/api/sessions/memory").json()
     tag = next(m for m in memory if m["area"] == "time complexity analysis")
     assert tag["frequency"] >= 2
+
+
+def test_clear_sessions_history_also_clears_memory(client):
+    with patch("app.routes.sessions.orchestrator") as mock_orch, \
+         patch("app.services.llm.LLMService.complete", new=AsyncMock(return_value="Hello")), \
+         patch("app.routes.sessions.MemoryAgent.extract_weaknesses", new=AsyncMock(return_value=["time complexity"])):
+        mock_orch.run_jd_pipeline = AsyncMock(return_value=_pipeline_result())
+        sid = client.post("/api/sessions/from-jd", json={"jd": "JD one"}).json()["session_id"]
+        mock_orch.run_scoring = AsyncMock(
+            return_value=ScorecardResult(
+                overall_score=7,
+                strengths=["clarity"],
+                areas_to_improve=["depth"],
+                recommendation="hire",
+            )
+        )
+        client.post(f"/api/sessions/{sid}/finish")
+
+    cleared = client.delete("/api/sessions/")
+    assert cleared.status_code == 200
+    assert cleared.json()["deleted_sessions"] >= 1
+    assert cleared.json()["deleted_memory_rows"] >= 1
+
+    memory = client.get("/api/sessions/memory")
+    assert memory.status_code == 200
+    assert memory.json() == []

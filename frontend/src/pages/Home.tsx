@@ -44,6 +44,7 @@ export default function Home() {
   const navigate = useNavigate()
   const [sourceTab, setSourceTab] = useState<SourceTab>("jd")
   const [jd, setJd] = useState("")
+  const [cvText, setCvText] = useState("")
   const [problemUrl, setProblemUrl] = useState("")
   const [step, setStep] = useState<Step>("paste")
   const [loading, setLoading] = useState(false)
@@ -62,7 +63,7 @@ export default function Home() {
     setLoading(true)
     setError(null)
     try {
-      const info = await api.createSessionFromJD(jd, difficulty)
+      const info = await api.createSessionFromJD(jd, difficulty, cvText.trim() || undefined)
       setSessionInfo(info)
       setStep("confirm")
     } catch (e) {
@@ -296,6 +297,17 @@ export default function Home() {
                         </button>
                       ))}
                     </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <p className="text-[10px] font-bold text-outline uppercase tracking-wider px-0.5">
+                      CV / Resume (optional)
+                    </p>
+                    <textarea
+                      value={cvText}
+                      onChange={(e) => setCvText(e.target.value)}
+                      placeholder="Paste resume highlights for personalized interview questions"
+                      className="w-full min-h-[88px] bg-transparent border border-outline-variant/30 rounded-xl px-3 py-2 text-xs text-on-surface placeholder:text-outline focus:outline-none focus:border-primary/50 resize-y"
+                    />
                   </div>
 
                   {error && (

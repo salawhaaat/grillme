@@ -140,6 +140,7 @@ def test_list_sessions_includes_score_when_finished(client):
     session = next(s for s in resp.json() if s["id"] == sid)
     assert session["overall_score"] == 9
     assert session["finished_at"] is not None
+    assert session["total_tokens"] >= 0
 
 
 def test_list_sessions_score_null_when_not_finished(client):

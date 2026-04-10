@@ -5,7 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -48,6 +48,28 @@ DIFFICULTY_INSTRUCTIONS: dict[str, str] = {
 }
 
 
+def _estimate_text_tokens(text: str | None) -> int:
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
+
+
+def _estimate_messages_tokens(messages: list[dict]) -> int:
+    return sum(_estimate_text_tokens(str(m.get("content", ""))) for m in messages)
+
+
+def _apply_usage(session: InterviewSession, prompt_tokens: int, completion_tokens: int) -> None:
+    session.prompt_tokens = (session.prompt_tokens or 0) + max(0, prompt_tokens)
+    session.completion_tokens = (session.completion_tokens or 0) + max(0, completion_tokens)
+    session.total_tokens = (session.total_tokens or 0) + max(0, prompt_tokens + completion_tokens)
+
+
+def _cv_context(cv_text: str | None) -> str:
+    if not cv_text:
+        return ""
+    return cv_text[:3000]
+
+
 def _build_system_prompt(session: InterviewSession) -> str:
     difficulty_block = DIFFICULTY_INSTRUCTIONS.get(session.difficulty or "medium", DIFFICULTY_INSTRUCTIONS["medium"])
 
@@ -59,6 +81,11 @@ def _build_system_prompt(session: InterviewSession) -> str:
         "stay in character throughout.\n\n"
         f"{difficulty_block}\n\n"
     )
+    if session.cv_text:
+        base += (
+            "Candidate CV context (use only these facts for personalized follow-ups):\n"
+            f"{_cv_context(session.cv_text)}\n\n"
+        )
     if not session.question_bank:
         return base
 
@@ -82,6 +109,7 @@ def _build_system_prompt(session: InterviewSession) -> str:
 
 class FromJDRequest(BaseModel):
     jd: str
+    cv_text: str | None = None
     difficulty: Literal["rare", "medium", "well_done"] = "medium"
 
     @field_validator("jd")
@@ -90,6 +118,18 @@ class FromJDRequest(BaseModel):
         if not v.strip():
             raise ValueError("jd must not be empty")
         return v
+
+    @field_validator("cv_text")
+    @classmethod
+    def cv_size_guard(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        trimmed = v.strip()
+        if not trimmed:
+            return None
+        if len(trimmed) > 20000:
+            raise ValueError("cv_text is too long")
+        return trimmed
 
 
 class FromProblemRequest(BaseModel):
@@ -117,9 +157,13 @@ class SessionResponse(BaseModel):
     level: str | None
     persona: str | None
     prep_plan: str | None
+    cv_text: str | None
     oa_platform: str | None
     problem_url: str | None
     scorecard: dict | None
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
     messages: list[dict]
     created_at: datetime
     finished_at: datetime | None
@@ -134,6 +178,7 @@ class SessionListItem(BaseModel):
     level: str | None
     oa_platform: str | None
     overall_score: int | None
+    total_tokens: int
     message_count: int
     created_at: datetime
     finished_at: datetime | None
@@ -167,6 +212,7 @@ async def list_sessions(db: AsyncSession = Depends(get_db)) -> list[SessionListI
             level=s.level,
             oa_platform=s.oa_platform,
             overall_score=score,
+            total_tokens=s.total_tokens or 0,
             message_count=len(messages),
             created_at=s.created_at,
             finished_at=s.finished_at,
@@ -204,19 +250,21 @@ async def create_from_jd(
             f"The company uses {oa_platform} for online assessments. Include platform-specific tips."
         )
 
-    opening = await llm.complete([
+    opening_messages = [
         {
             "role": "system",
             "content": (
                 f"{persona}\n\n"
                 f"You are interviewing a candidate for {parsed.get('role')} at {parsed.get('company')} "
                 f"({parsed.get('level')} level). "
+                f"{'Candidate CV context:\\n' + _cv_context(body.cv_text) + '\\n\\n' if body.cv_text else ''}"
                 "Give a one-sentence introduction as yourself, then ask your first warmup question. "
                 "Be direct. No preamble, no agenda, no prep tips."
             ),
         },
         {"role": "user", "content": "Begin."},
-    ])
+    ]
+    opening = await llm.complete(opening_messages)
 
     session = InterviewSession(
         mode="jd",
@@ -228,8 +276,14 @@ async def create_from_jd(
         persona=persona,
         question_bank=json.dumps(question_bank),
         prep_plan=prep_plan_with_oa,
+        cv_text=body.cv_text,
         oa_platform=oa_platform,
         messages=json.dumps([{"role": "assistant", "content": opening}]),
+    )
+    _apply_usage(
+        session,
+        prompt_tokens=_estimate_messages_tokens(opening_messages),
+        completion_tokens=_estimate_text_tokens(opening),
     )
     db.add(session)
     await db.commit()
@@ -263,6 +317,37 @@ async def get_user_memory(db: AsyncSession = Depends(get_db)) -> list[dict]:
     ]
 
 
+@router.delete("/")
+async def clear_sessions_history(db: AsyncSession = Depends(get_db)) -> dict:
+    session_result = await db.execute(delete(InterviewSession))
+    memory_result = await db.execute(delete(UserMemory))
+    await db.commit()
+    return {
+        "deleted_sessions": session_result.rowcount or 0,
+        "deleted_memory_rows": memory_result.rowcount or 0,
+    }
+
+
+@router.delete("/{session_id}")
+async def delete_session(
+    session_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    session = await db.get(InterviewSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    memory_rows = await db.execute(
+        select(UserMemory).where(UserMemory.last_session_id == session_id)
+    )
+    for row in memory_rows.scalars().all():
+        row.last_session_id = None
+
+    await db.delete(session)
+    await db.commit()
+    return {"deleted_session_id": session_id}
+
+
 @router.get("/{session_id}", response_model=SessionResponse)
 async def get_session(
     session_id: int,
@@ -281,9 +366,13 @@ async def get_session(
         level=session.level,
         persona=session.persona,
         prep_plan=session.prep_plan,
+        cv_text=session.cv_text,
         oa_platform=session.oa_platform,
         problem_url=session.problem_url,
         scorecard=json.loads(session.scorecard) if session.scorecard else None,
+        prompt_tokens=session.prompt_tokens or 0,
+        completion_tokens=session.completion_tokens or 0,
+        total_tokens=session.total_tokens or 0,
         messages=json.loads(session.messages),
         created_at=session.created_at,
         finished_at=session.finished_at,
@@ -321,6 +410,12 @@ async def send_message(
 
         messages.append({"role": "assistant", "content": "".join(collected)})
         session.messages = json.dumps(messages)
+        assistant_text = "".join(collected)
+        _apply_usage(
+            session,
+            prompt_tokens=_estimate_messages_tokens(llm_messages),
+            completion_tokens=_estimate_text_tokens(assistant_text),
+        )
         await db.commit()
 
     return StreamingResponse(generate(), media_type="text/plain")
@@ -359,7 +454,7 @@ async def create_from_problem(
         logger.error("Persona generation failed: %s", e)
         raise HTTPException(503, f"LLM processing failed: {e}") from e
 
-    opening = await llm.complete([
+    opening_messages = [
         {
             "role": "system",
             "content": (
@@ -371,7 +466,8 @@ async def create_from_problem(
             ),
         },
         {"role": "user", "content": "Begin."},
-    ])
+    ]
+    opening = await llm.complete(opening_messages)
 
     session = InterviewSession(
         mode="problem",
@@ -388,6 +484,11 @@ async def create_from_problem(
             "coding": {"type": "leetcode", "topic": problem["title"], "hints": []},
         }),
         messages=json.dumps([{"role": "assistant", "content": opening}]),
+    )
+    _apply_usage(
+        session,
+        prompt_tokens=_estimate_messages_tokens(opening_messages),
+        completion_tokens=_estimate_text_tokens(opening),
     )
     db.add(session)
     await db.commit()
@@ -421,6 +522,13 @@ async def finish_session(
 
     session.scorecard = scorecard_raw
     session.finished_at = datetime.now(UTC)
+    score_prompt_tokens = (_estimate_messages_tokens(messages) + _estimate_text_tokens(session.persona or "")) * 2
+    score_completion_tokens = _estimate_text_tokens(scorecard_raw) * 2
+    _apply_usage(
+        session,
+        prompt_tokens=score_prompt_tokens,
+        completion_tokens=score_completion_tokens,
+    )
     await db.commit()
 
     try:
@@ -447,4 +555,3 @@ async def finish_session(
         logger.warning("Memory extraction failed: %s", e)
 
     return {"scorecard": json.loads(scorecard_raw)}
-
