@@ -97,6 +97,14 @@ def _build_system_prompt(session: InterviewSession) -> str:
             "- React to their code and test results when they share them.\n"
             "- Near the end (after they solve or give up), wrap with 'That's all from me — do you have any questions for me?'\n"
         )
+    messages = json.loads(session.messages) if session.messages else []
+    latest_code_block = None
+    for m in reversed(messages):
+        if m.get("content", "").startswith("[CODE UPDATE]"):
+            latest_code_block = m["content"]
+            break
+    if latest_code_block:
+        base += f"\n\nLATEST CODE FROM CANDIDATE:\n{latest_code_block}\n"
     if not session.question_bank:
         return base
 
