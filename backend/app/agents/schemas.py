@@ -105,6 +105,18 @@ class CreateSessionInput(BaseModel):
     difficulty: Literal["rare", "medium", "well_done"] = "medium"
 
 
+class PersonaVoice(BaseModel):
+    persona_text: str
+    oa_platform: str | None = None
+
+
+class PersonaVoiceInput(BaseModel):
+    parsed_jd: ParsedJD | None = None
+    problem: CodingProblem
+    research: ResearchIntel | None = None
+    user_weaknesses: list[str] = Field(default_factory=list)
+
+
 class AxisScore(BaseModel):
     score: int
     comment: str

@@ -2,7 +2,13 @@ import asyncio
 import json
 
 from app.agents.base import BaseAgent
-from app.agents.schemas import PersonaInput, PersonaOutput, QuestionBank
+from app.agents.schemas import (
+    PersonaInput,
+    PersonaOutput,
+    PersonaVoice,
+    PersonaVoiceInput,
+    QuestionBank,
+)
 from app.services.jd import detect_oa_platform
 
 
@@ -110,6 +116,56 @@ class PersonaAgent(BaseAgent):
             },
         ]
         return await self.llm.complete(messages)
+
+    async def build_voice(self, input_data: PersonaVoiceInput) -> PersonaVoice:
+        company = "Unknown"
+        role = "Unknown"
+        level = "Unknown"
+        if input_data.parsed_jd:
+            company = input_data.parsed_jd.company
+            role = input_data.parsed_jd.role
+            level = input_data.parsed_jd.level
+
+        research_line = ""
+        if input_data.research and (
+            input_data.research.culture_notes or input_data.research.common_questions
+        ):
+            research_line = (
+                f"\nCulture notes: {input_data.research.culture_notes}. "
+                f"Common interview question patterns: {input_data.research.common_questions}."
+            )
+
+        weakness_line = ""
+        if input_data.user_weaknesses:
+            weakness_line = (
+                f"\nProbe these likely weak areas naturally during the interview: "
+                f"{', '.join(input_data.user_weaknesses)}."
+            )
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are designing a realistic interviewer character for a coding interview. "
+                    "Give them a name and 2-3 sentences of personality + style. "
+                    "They must NOT reveal the problem's hidden details unless asked."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Company: {company}, Role: {role}, Level: {level}.\n"
+                    f"Problem: {input_data.problem.title} ({input_data.problem.difficulty})."
+                    f"{research_line}"
+                    f"{weakness_line}\n"
+                    "Return just the persona description, no JSON."
+                ),
+            },
+        ]
+
+        persona_text = await self.llm.complete(messages)
+        oa_platform = detect_oa_platform(company) if input_data.parsed_jd else None
+        return PersonaVoice(persona_text=persona_text, oa_platform=oa_platform)
 
     async def run(self, input_data: PersonaInput) -> PersonaOutput:
         persona_text, question_bank, prep_plan = await asyncio.gather(
