@@ -113,6 +113,7 @@ class SessionResponse(BaseModel):
     level: str | None
     persona: str | None
     prep_plan: str | None
+    oa_platform: str | None
     problem_url: str | None
     scorecard: dict | None
     messages: list[dict]
@@ -127,6 +128,7 @@ class SessionListItem(BaseModel):
     company: str | None
     role: str | None
     level: str | None
+    oa_platform: str | None
     overall_score: int | None
     message_count: int
     created_at: datetime
@@ -159,6 +161,7 @@ async def list_sessions(db: AsyncSession = Depends(get_db)) -> list[SessionListI
             company=s.company,
             role=s.role,
             level=s.level,
+            oa_platform=s.oa_platform,
             overall_score=score,
             message_count=len(messages),
             created_at=s.created_at,
@@ -173,10 +176,17 @@ async def create_from_jd(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     try:
-        parsed, persona, question_bank, prep_plan = await jd_service.process_jd(body.jd)
+        parsed, persona, question_bank, prep_plan, oa_platform = await jd_service.process_jd(body.jd)
     except Exception as e:
         logger.error("JD processing failed: %s", e)
         raise HTTPException(503, f"LLM processing failed: {e}") from e
+
+    prep_plan_with_oa = prep_plan
+    if oa_platform:
+        prep_plan_with_oa = (
+            f"{prep_plan}\n\n"
+            f"The company uses {oa_platform} for online assessments. Include platform-specific tips."
+        )
 
     opening = await llm.complete([
         {
@@ -201,7 +211,8 @@ async def create_from_jd(
         level=parsed.get("level"),
         persona=persona,
         question_bank=json.dumps(question_bank),
-        prep_plan=prep_plan,
+        prep_plan=prep_plan_with_oa,
+        oa_platform=oa_platform,
         messages=json.dumps([{"role": "assistant", "content": opening}]),
     )
     db.add(session)
@@ -215,6 +226,7 @@ async def create_from_jd(
         "level": session.level,
         "difficulty": session.difficulty,
         "prep_plan": session.prep_plan,
+        "oa_platform": session.oa_platform,
         "opening_message": opening,
     }
 
@@ -237,6 +249,7 @@ async def get_session(
         level=session.level,
         persona=session.persona,
         prep_plan=session.prep_plan,
+        oa_platform=session.oa_platform,
         problem_url=session.problem_url,
         scorecard=json.loads(session.scorecard) if session.scorecard else None,
         messages=json.loads(session.messages),

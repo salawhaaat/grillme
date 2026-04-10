@@ -20,7 +20,7 @@ def _create_session(client, difficulty: str = "medium") -> int:
 
     with patch("app.routes.sessions.jd_service") as mock_jds, \
          patch("app.services.llm.LLMService.complete", new=fake_complete):
-        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK, "1. Study Python"))
+        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK, "1. Study Python", None))
         resp = client.post("/api/sessions/from-jd", json={"jd": JD_TEXT, "difficulty": difficulty})
     assert resp.status_code == 200
     return resp.json()["session_id"]
@@ -34,7 +34,7 @@ def test_difficulty_defaults_to_medium(client):
 
     with patch("app.routes.sessions.jd_service") as mock_jds, \
          patch("app.services.llm.LLMService.complete", new=fake_complete):
-        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK, "1. Study Python"))
+        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK, "1. Study Python", None))
         resp = client.post("/api/sessions/from-jd", json={"jd": JD_TEXT})
 
     session_id = resp.json()["session_id"]
@@ -55,7 +55,7 @@ def test_invalid_difficulty_rejected(client):
 
     with patch("app.routes.sessions.jd_service") as mock_jds, \
          patch("app.services.llm.LLMService.complete", new=fake_complete):
-        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK, "1. Study Python"))
+        mock_jds.process_jd = AsyncMock(return_value=(PARSED, PERSONA, QUESTION_BANK, "1. Study Python", None))
         resp = client.post("/api/sessions/from-jd", json={"jd": JD_TEXT, "difficulty": "god_mode"})
 
     assert resp.status_code == 422

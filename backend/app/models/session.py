@@ -10,6 +10,7 @@ class InterviewSession(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     mode: Mapped[str] = mapped_column(String(20), default="jd")
     difficulty: Mapped[str] = mapped_column(String(20), default="medium", server_default="medium")
+    oa_platform: Mapped[str | None] = mapped_column(String(100), nullable=True)
     jd_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
     company: Mapped[str | None] = mapped_column(String(200), nullable=True)
     role: Mapped[str | None] = mapped_column(String(200), nullable=True)

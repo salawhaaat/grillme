@@ -97,12 +97,13 @@ async def test_process_jd_parallelizes_after_parse(jd_service, mock_llm):
         "1. Study system design\n2. Practice algorithms",  # generate_prep_plan (gathered)
     ]
 
-    parsed, persona, question_bank, prep_plan = await jd_service.process_jd(JD_TEXT)
+    parsed, persona, question_bank, prep_plan, oa_platform = await jd_service.process_jd(JD_TEXT)
 
     assert parsed["company"] == "Stripe"
     assert "Alex" in persona
     assert "warmup" in question_bank
     assert "system design" in prep_plan
+    assert oa_platform is None
     assert mock_llm.complete.call_count == 4
 
 

@@ -43,7 +43,7 @@ def test_from_jd_returns_prep_plan(client):
     with patch("app.routes.sessions.jd_service") as mock_jds, \
          patch("app.services.llm.LLMService.complete", new=fake_complete):
         mock_jds.process_jd = AsyncMock(
-            return_value=(PARSED, PERSONA, QUESTION_BANK, PREP_PLAN)
+            return_value=(PARSED, PERSONA, QUESTION_BANK, PREP_PLAN, None)
         )
         resp = client.post("/api/sessions/from-jd", json={"jd": JD_TEXT})
 
@@ -59,7 +59,7 @@ def test_prep_plan_stored_on_session(client):
     with patch("app.routes.sessions.jd_service") as mock_jds, \
          patch("app.services.llm.LLMService.complete", new=fake_complete):
         mock_jds.process_jd = AsyncMock(
-            return_value=(PARSED, PERSONA, QUESTION_BANK, PREP_PLAN)
+            return_value=(PARSED, PERSONA, QUESTION_BANK, PREP_PLAN, None)
         )
         resp = client.post("/api/sessions/from-jd", json={"jd": JD_TEXT})
 

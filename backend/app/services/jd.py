@@ -1,9 +1,33 @@
 import asyncio
 import json
+import re
 from app.services.llm import LLMService
 from app.core.logging import setup_logger
 
 logger = setup_logger(__name__)
+
+OA_PLATFORM_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bhackerrank\b", re.IGNORECASE), "HackerRank"),
+    (re.compile(r"\bcodesignal\b", re.IGNORECASE), "CodeSignal"),
+    (re.compile(r"\bkarat\b", re.IGNORECASE), "Karat"),
+    (re.compile(r"\bcoderpad\b", re.IGNORECASE), "CoderPad"),
+    (re.compile(r"\bleetcode\b", re.IGNORECASE), "LeetCode"),
+    (re.compile(r"\btriplebyte\b", re.IGNORECASE), "Triplebyte"),
+    (re.compile(r"\bcodility\b", re.IGNORECASE), "Codility"),
+]
+
+
+def detect_oa_platform(jd_raw: str) -> str | None:
+    first_match_name: str | None = None
+    first_match_index: int | None = None
+    for pattern, canonical_name in OA_PLATFORM_PATTERNS:
+        match = pattern.search(jd_raw)
+        if not match:
+            continue
+        if first_match_index is None or match.start() < first_match_index:
+            first_match_index = match.start()
+            first_match_name = canonical_name
+    return first_match_name
 
 
 class JDService:
@@ -138,7 +162,7 @@ class JDService:
         ]
         return await self.llm.complete(messages)
 
-    async def process_jd(self, jd_raw: str) -> tuple[dict, str, dict, str]:
+    async def process_jd(self, jd_raw: str) -> tuple[dict, str, dict, str, str | None]:
         """Parallelization: parse JD, then gather persona + question bank + prep plan concurrently."""
         parsed = await self.parse_jd(jd_raw)
         persona, question_bank, prep_plan = await asyncio.gather(
@@ -146,7 +170,8 @@ class JDService:
             self.generate_question_bank(parsed),
             self.generate_prep_plan(parsed),
         )
-        return parsed, persona, question_bank, prep_plan
+        oa_platform = detect_oa_platform(jd_raw)
+        return parsed, persona, question_bank, prep_plan, oa_platform
 
     async def generate_scorecard(self, messages: list[dict], persona: str) -> str:
         """Reflection pattern: draft scorecard → self-critique → refined final."""

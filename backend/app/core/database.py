@@ -41,6 +41,11 @@ async def _run_migrations(conn: AsyncConnection) -> None:
             "ALTER TABLE interview_sessions ADD COLUMN problem_url TEXT"
         ))
 
+    if "oa_platform" not in columns:
+        await conn.execute(text(
+            "ALTER TABLE interview_sessions ADD COLUMN oa_platform VARCHAR(100)"
+        ))
+
 
 async def init_db() -> None:
     async with engine.begin() as conn:
