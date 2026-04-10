@@ -1,3 +1,4 @@
+from app.agents.memory import MemoryAgent
 from app.agents.orchestrator import Orchestrator
 from app.agents.base import BaseAgent
 from app.agents.parser import ParseAgent
@@ -21,6 +22,7 @@ from app.agents.schemas import (
 __all__ = [
     "BaseAgent",
     "Orchestrator",
+    "MemoryAgent",
     "ParseAgent",
     "PersonaAgent",
     "ScorerAgent",

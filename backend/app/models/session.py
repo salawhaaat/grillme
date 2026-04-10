@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from sqlalchemy import String, DateTime, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
@@ -21,5 +21,5 @@ class InterviewSession(Base):
     problem_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     scorecard: Mapped[str | None] = mapped_column(Text, nullable=True)
     messages: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

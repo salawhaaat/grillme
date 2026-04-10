@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -14,4 +14,4 @@ class Problem(Base):
     difficulty: Mapped[str] = mapped_column(String(20))
     url: Mapped[str] = mapped_column(String(500), unique=True)
     description: Mapped[str] = mapped_column(Text)
-    scraped_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    scraped_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))

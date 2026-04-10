@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,9 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.logging import setup_logger
+from app.agents.memory import MemoryAgent
 from app.agents.orchestrator import Orchestrator
+from app.agents.schemas import ScorecardResult
 from app.models.problem import Problem
 from app.models.session import InterviewSession
+from app.models.user_memory import UserMemory
 from app.services.llm import LLMService, RateLimitError, ProviderError
 from app.services.scraper import ScraperService
 
@@ -176,8 +179,15 @@ async def create_from_jd(
     body: FromJDRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    weakness_rows = await db.execute(
+        select(UserMemory).order_by(UserMemory.frequency.desc()).limit(5)
+    )
+    user_weaknesses = [w.area for w in weakness_rows.scalars().all()]
+
     try:
-        result = await orchestrator.run_jd_pipeline(body.jd)
+        result = await orchestrator.run_jd_pipeline(
+            body.jd, user_weaknesses=user_weaknesses
+        )
         parsed = result.parsed_jd.model_dump()
         persona = result.persona.persona_text
         question_bank = result.persona.question_bank.model_dump()
@@ -235,6 +245,22 @@ async def create_from_jd(
         "oa_platform": session.oa_platform,
         "opening_message": opening,
     }
+
+
+@router.get("/memory")
+async def get_user_memory(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    result = await db.execute(
+        select(UserMemory).order_by(UserMemory.frequency.desc())
+    )
+    memories = result.scalars().all()
+    return [
+        {
+            "area": m.area,
+            "frequency": m.frequency,
+            "last_session_id": m.last_session_id,
+        }
+        for m in memories
+    ]
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
@@ -394,7 +420,31 @@ async def finish_session(
         raise HTTPException(503, f"Scorecard generation failed: {e}") from e
 
     session.scorecard = scorecard_raw
-    session.finished_at = datetime.utcnow()
+    session.finished_at = datetime.now(UTC)
     await db.commit()
 
+    try:
+        memory_agent = MemoryAgent(llm)
+        scorecard_data = json.loads(scorecard_raw) if isinstance(scorecard_raw, str) else scorecard_raw
+        scorecard_obj = (
+            ScorecardResult(**scorecard_data)
+            if isinstance(scorecard_data, dict)
+            else scorecard_data
+        )
+        tags = await memory_agent.extract_weaknesses(scorecard_obj)
+
+        for tag in tags:
+            existing = await db.execute(select(UserMemory).where(UserMemory.area == tag))
+            row = existing.scalar_one_or_none()
+            if row:
+                row.frequency += 1
+                row.last_session_id = session.id
+                row.updated_at = datetime.now(UTC)
+            else:
+                db.add(UserMemory(area=tag, last_session_id=session.id))
+        await db.commit()
+    except Exception as e:
+        logger.warning("Memory extraction failed: %s", e)
+
     return {"scorecard": json.loads(scorecard_raw)}
+
