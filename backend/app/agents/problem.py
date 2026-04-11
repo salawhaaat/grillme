@@ -1,9 +1,11 @@
 import json
+import random
 from typing import Any
 
 from app.agents.base import BaseAgent
 from app.agents.schemas import CodingProblem, ParsedJD, ProblemInput
 from app.services.llm import LLMService
+from app.services.question_bank import QuestionBankService, QuestionEntry
 from app.services.scraper import ScraperService
 
 
@@ -11,16 +13,25 @@ class ProblemAgent(BaseAgent):
     name = "problem"
     description = "Generates a cut coding problem from JD / URL / pasted text"
 
-    def __init__(self, llm: LLMService, scraper: ScraperService | None = None) -> None:
+    def __init__(
+        self,
+        llm: LLMService,
+        scraper: ScraperService | None = None,
+        question_bank: QuestionBankService | None = None,
+    ) -> None:
         super().__init__(llm)
         self.scraper = scraper or ScraperService()
+        self.question_bank = question_bank or QuestionBankService()
 
     async def run(self, input_data: ProblemInput) -> CodingProblem:
         source = input_data.source
         if source == "jd":
             if not input_data.parsed_jd:
                 raise ValueError("parsed_jd required for jd source")
-            slug = await self._pick_slug_for_company(input_data.parsed_jd)
+            slug = await self._pick_slug_for_company(
+                input_data.parsed_jd,
+                user_weaknesses=input_data.user_weaknesses,
+            )
             full = await self.scraper.scrape(f"https://leetcode.com/problems/{slug}/")
             if not full:
                 full = {
@@ -55,7 +66,37 @@ class ProblemAgent(BaseAgent):
             method_name=generated["method_name"],
         )
 
-    async def _pick_slug_for_company(self, parsed: ParsedJD) -> str:
+    async def _pick_slug_for_company(
+        self,
+        parsed: ParsedJD,
+        user_weaknesses: list[str] | None = None,
+    ) -> str:
+        candidates = self.question_bank.get_for_company(parsed.company or "")
+        if candidates:
+            return self._weighted_pick(candidates, user_weaknesses or [])
+        return await self._llm_guess_slug(parsed)
+
+    def _weighted_pick(self, candidates: list[QuestionEntry], weaknesses: list[str]) -> str:
+        weights: list[float] = []
+        for entry in candidates:
+            weight = float(entry.frequency)
+            if weaknesses:
+                boosted = False
+                for weakness in weaknesses:
+                    weakness_lower = weakness.lower()
+                    for topic in entry.topics:
+                        topic_lower = topic.lower()
+                        if weakness_lower in topic_lower or topic_lower in weakness_lower:
+                            weight *= 2.0
+                            boosted = True
+                            break
+                    if boosted:
+                        break
+            weights.append(weight)
+        chosen = random.choices(candidates, weights=weights, k=1)[0]
+        return chosen.slug
+
+    async def _llm_guess_slug(self, parsed: ParsedJD) -> str:
         messages = [
             {
                 "role": "system",

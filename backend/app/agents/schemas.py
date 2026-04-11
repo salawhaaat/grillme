@@ -97,6 +97,7 @@ class ProblemInput(BaseModel):
     source: Literal["jd", "url", "text"]
     content: str
     parsed_jd: ParsedJD | None = None
+    user_weaknesses: list[str] = Field(default_factory=list)
 
 
 class CreateSessionInput(BaseModel):

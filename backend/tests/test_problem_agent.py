@@ -1,11 +1,13 @@
 import json
-from unittest.mock import AsyncMock
+from collections import Counter
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from app.agents.problem import ProblemAgent
 from app.agents.schemas import CodingProblem, ParsedJD, ProblemInput
 from app.services.llm import LLMService
+from app.services.question_bank import QuestionEntry
 from app.services.scraper import ScraperService
 
 
@@ -133,3 +135,152 @@ async def test_paraphrase_and_cut_prompt_requires_removing_examples_constraints(
     assert "You MUST REMOVE" in system_prompt
     assert "Example inputs/outputs" in system_prompt
     assert "Constraint bounds" in system_prompt
+
+
+def _amazon_entries() -> list[QuestionEntry]:
+    return [
+        QuestionEntry(
+            title="Two Sum",
+            slug="two-sum",
+            difficulty="Easy",
+            frequency=1,
+            sources=["swolecoder"],
+            topics=["array", "hashmap"],
+            last_seen="2024",
+        ),
+        QuestionEntry(
+            title="LRU Cache",
+            slug="lru-cache",
+            difficulty="Medium",
+            frequency=2,
+            sources=["KushalVijay"],
+            topics=["design", "hashmap", "linked-list"],
+            last_seen="2024",
+        ),
+        QuestionEntry(
+            title="Number of Islands",
+            slug="number-of-islands",
+            difficulty="Medium",
+            frequency=3,
+            sources=["raleighlittles"],
+            topics=["graph", "dfs", "bfs"],
+            last_seen="2024",
+        ),
+    ]
+
+
+async def test_pick_slug_for_company_uses_question_bank_without_llm():
+    llm = AsyncMock(spec=LLMService)
+    scraper = AsyncMock(spec=ScraperService)
+    question_bank = Mock()
+    question_bank.get_for_company.return_value = _amazon_entries()
+    agent = ProblemAgent(llm=llm, scraper=scraper, question_bank=question_bank)
+    agent._llm_guess_slug = AsyncMock(return_value="word-ladder")  # type: ignore[method-assign]
+
+    slug = await agent._pick_slug_for_company(
+        ParsedJD(
+            company="Amazon",
+            role="SDE",
+            level="mid",
+            key_skills=["Python"],
+            focus_areas=["algorithms"],
+        ),
+        user_weaknesses=[],
+    )
+
+    assert slug in {"two-sum", "lru-cache", "number-of-islands"}
+    agent._llm_guess_slug.assert_not_called()  # type: ignore[attr-defined]
+
+
+def test_weighted_pick_favors_higher_frequency():
+    llm = AsyncMock(spec=LLMService)
+    scraper = AsyncMock(spec=ScraperService)
+    question_bank = Mock()
+    agent = ProblemAgent(llm=llm, scraper=scraper, question_bank=question_bank)
+    entries = [
+        QuestionEntry(
+            title="Low A",
+            slug="low-a",
+            difficulty="Easy",
+            frequency=1,
+            sources=["swolecoder"],
+            topics=["array"],
+            last_seen="2024",
+        ),
+        QuestionEntry(
+            title="High",
+            slug="high",
+            difficulty="Medium",
+            frequency=10,
+            sources=["KushalVijay"],
+            topics=["hashmap"],
+            last_seen="2024",
+        ),
+        QuestionEntry(
+            title="Low B",
+            slug="low-b",
+            difficulty="Easy",
+            frequency=1,
+            sources=["raleighlittles"],
+            topics=["tree"],
+            last_seen="2024",
+        ),
+    ]
+
+    picks = [agent._weighted_pick(entries, weaknesses=[]) for _ in range(100)]
+    counts = Counter(picks)
+    assert counts["high"] > 50
+
+
+def test_weighted_pick_biases_toward_weakness_topic_match():
+    llm = AsyncMock(spec=LLMService)
+    scraper = AsyncMock(spec=ScraperService)
+    question_bank = Mock()
+    agent = ProblemAgent(llm=llm, scraper=scraper, question_bank=question_bank)
+    entries = [
+        QuestionEntry(
+            title="Hash Problem",
+            slug="hash-problem",
+            difficulty="Medium",
+            frequency=1,
+            sources=["swolecoder"],
+            topics=["hashmap"],
+            last_seen="2024",
+        ),
+        QuestionEntry(
+            title="Tree Problem",
+            slug="tree-problem",
+            difficulty="Medium",
+            frequency=1,
+            sources=["KushalVijay"],
+            topics=["tree"],
+            last_seen="2024",
+        ),
+    ]
+
+    picks = [agent._weighted_pick(entries, weaknesses=["hashmap"]) for _ in range(100)]
+    counts = Counter(picks)
+    assert counts["hash-problem"] > counts["tree-problem"]
+
+
+async def test_pick_slug_for_unknown_company_falls_back_to_llm_guess():
+    llm = AsyncMock(spec=LLMService)
+    scraper = AsyncMock(spec=ScraperService)
+    question_bank = Mock()
+    question_bank.get_for_company.return_value = []
+    agent = ProblemAgent(llm=llm, scraper=scraper, question_bank=question_bank)
+    agent._llm_guess_slug = AsyncMock(return_value="two-sum")  # type: ignore[method-assign]
+
+    slug = await agent._pick_slug_for_company(
+        ParsedJD(
+            company="NicheCorp",
+            role="Engineer",
+            level="mid",
+            key_skills=["Python"],
+            focus_areas=["algorithms"],
+        ),
+        user_weaknesses=["hashmap"],
+    )
+
+    assert slug == "two-sum"
+    agent._llm_guess_slug.assert_awaited_once()  # type: ignore[attr-defined]

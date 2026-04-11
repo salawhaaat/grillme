@@ -88,6 +88,7 @@ class Orchestrator:
                 source=source,
                 content=content,
                 parsed_jd=parsed_jd,
+                user_weaknesses=user_weaknesses or [],
             )
         )
 
