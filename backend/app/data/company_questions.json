@@ -1,0 +1,186 @@
+{
+  "amazon": [
+    {
+      "title": "LRU Cache",
+      "slug": "lru-cache",
+      "difficulty": "Medium",
+      "frequency": 3,
+      "sources": ["swolecoder", "KushalVijay", "raleighlittles"],
+      "topics": ["hashmap", "linked-list", "design"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Two Sum",
+      "slug": "two-sum",
+      "difficulty": "Easy",
+      "frequency": 3,
+      "sources": ["swolecoder", "KushalVijay", "raleighlittles"],
+      "topics": ["array", "hashmap"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Number of Islands",
+      "slug": "number-of-islands",
+      "difficulty": "Medium",
+      "frequency": 3,
+      "sources": ["swolecoder", "KushalVijay", "raleighlittles"],
+      "topics": ["graph", "dfs", "bfs", "matrix"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Word Ladder",
+      "slug": "word-ladder",
+      "difficulty": "Hard",
+      "frequency": 3,
+      "sources": ["swolecoder", "KushalVijay", "raleighlittles"],
+      "topics": ["graph", "bfs", "string"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Merge k Sorted Lists",
+      "slug": "merge-k-sorted-lists",
+      "difficulty": "Hard",
+      "frequency": 3,
+      "sources": ["swolecoder", "KushalVijay", "raleighlittles"],
+      "topics": ["linked-list", "heap", "divide-and-conquer"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Course Schedule",
+      "slug": "course-schedule",
+      "difficulty": "Medium",
+      "frequency": 3,
+      "sources": ["swolecoder", "KushalVijay", "raleighlittles"],
+      "topics": ["graph", "topological-sort", "dfs"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Top K Frequent Elements",
+      "slug": "top-k-frequent-elements",
+      "difficulty": "Medium",
+      "frequency": 2,
+      "sources": ["swolecoder", "KushalVijay"],
+      "topics": ["array", "hashmap", "heap"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "K Closest Points to Origin",
+      "slug": "k-closest-points-to-origin",
+      "difficulty": "Medium",
+      "frequency": 2,
+      "sources": ["swolecoder", "raleighlittles"],
+      "topics": ["heap", "quickselect", "geometry"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Product of Array Except Self",
+      "slug": "product-of-array-except-self",
+      "difficulty": "Medium",
+      "frequency": 2,
+      "sources": ["KushalVijay", "raleighlittles"],
+      "topics": ["array", "prefix-sum"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Longest Substring Without Repeating Characters",
+      "slug": "longest-substring-without-repeating-characters",
+      "difficulty": "Medium",
+      "frequency": 2,
+      "sources": ["swolecoder", "KushalVijay"],
+      "topics": ["string", "sliding-window", "hashmap"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Meeting Rooms II",
+      "slug": "meeting-rooms-ii",
+      "difficulty": "Medium",
+      "frequency": 2,
+      "sources": ["swolecoder", "raleighlittles"],
+      "topics": ["intervals", "heap", "sorting"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Binary Tree Right Side View",
+      "slug": "binary-tree-right-side-view",
+      "difficulty": "Medium",
+      "frequency": 2,
+      "sources": ["KushalVijay", "raleighlittles"],
+      "topics": ["tree", "bfs", "dfs"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Rotting Oranges",
+      "slug": "rotting-oranges",
+      "difficulty": "Medium",
+      "frequency": 2,
+      "sources": ["swolecoder", "KushalVijay"],
+      "topics": ["matrix", "bfs", "queue"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Search in Rotated Sorted Array",
+      "slug": "search-in-rotated-sorted-array",
+      "difficulty": "Medium",
+      "frequency": 2,
+      "sources": ["swolecoder", "raleighlittles"],
+      "topics": ["array", "binary-search"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Median of Two Sorted Arrays",
+      "slug": "median-of-two-sorted-arrays",
+      "difficulty": "Hard",
+      "frequency": 1,
+      "sources": ["KushalVijay"],
+      "topics": ["array", "binary-search", "divide-and-conquer"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Trapping Rain Water",
+      "slug": "trapping-rain-water",
+      "difficulty": "Hard",
+      "frequency": 1,
+      "sources": ["raleighlittles"],
+      "topics": ["array", "two-pointers", "stack"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Subarray Sum Equals K",
+      "slug": "subarray-sum-equals-k",
+      "difficulty": "Medium",
+      "frequency": 1,
+      "sources": ["swolecoder"],
+      "topics": ["array", "prefix-sum", "hashmap"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Accounts Merge",
+      "slug": "accounts-merge",
+      "difficulty": "Medium",
+      "frequency": 1,
+      "sources": ["KushalVijay"],
+      "topics": ["graph", "union-find", "dfs"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Alien Dictionary",
+      "slug": "alien-dictionary",
+      "difficulty": "Hard",
+      "frequency": 1,
+      "sources": ["raleighlittles"],
+      "topics": ["graph", "topological-sort", "string"],
+      "last_seen": "2024"
+    },
+    {
+      "title": "Minimum Window Substring",
+      "slug": "minimum-window-substring",
+      "difficulty": "Hard",
+      "frequency": 1,
+      "sources": ["swolecoder"],
+      "topics": ["string", "sliding-window", "hashmap"],
+      "last_seen": "2024"
+    }
+  ],
+  "google": [],
+  "stripe": []
+}
