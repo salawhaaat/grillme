@@ -44,6 +44,8 @@ export default function SessionPage() {
   const [running, setRunning] = useState(false)
   const [showClosingPrompt, setShowClosingPrompt] = useState(false)
   const [speechInputActive, setSpeechInputActive] = useState(false)
+  const [audioEnabled, setAudioEnabled] = useState(false)
+  const [avatarSpeaking, setAvatarSpeaking] = useState(false)
 
   const {
     transcript,
@@ -55,6 +57,7 @@ export default function SessionPage() {
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null)
 
   useEffect(() => {
     api.getSession(sessionId).then((s) => {
@@ -83,6 +86,40 @@ export default function SessionPage() {
     if (!speechInputActive) return
     setInput(transcript)
   }, [transcript, speechInputActive])
+
+  useEffect(() => {
+    return () => {
+      if (activeAudioRef.current) {
+        activeAudioRef.current.pause()
+        activeAudioRef.current = null
+      }
+    }
+  }, [])
+
+  async function playAssistantAudio() {
+    if (!audioEnabled) return
+    try {
+      const blob = await api.speakSession(sessionId)
+      if (activeAudioRef.current) {
+        activeAudioRef.current.pause()
+      }
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      activeAudioRef.current = audio
+      setAvatarSpeaking(true)
+      audio.onended = () => {
+        URL.revokeObjectURL(url)
+        setAvatarSpeaking(false)
+      }
+      audio.onerror = () => {
+        URL.revokeObjectURL(url)
+        setAvatarSpeaking(false)
+      }
+      await audio.play()
+    } catch {
+      setAvatarSpeaking(false)
+    }
+  }
 
   async function handleRunCode() {
     if (!code.trim()) return
@@ -150,6 +187,7 @@ export default function SessionPage() {
           return updated
         })
       }
+      await playAssistantAudio()
     } catch (e) {
       setError(e instanceof Error ? e.message : "Stream error")
       setMessages((prev) => prev.slice(0, -1))
@@ -168,6 +206,7 @@ export default function SessionPage() {
 
   function handleMicToggle() {
     if (!isSpeechSupported) return
+    if (avatarSpeaking) return
     if (isListening) {
       stopListening()
       setSpeechInputActive(false)
@@ -210,6 +249,25 @@ export default function SessionPage() {
             </span>
             <span className="font-mono text-sm font-bold tracking-tight text-on-surface">{timer}</span>
           </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (audioEnabled && activeAudioRef.current) {
+                activeAudioRef.current.pause()
+                activeAudioRef.current = null
+                setAvatarSpeaking(false)
+              }
+              setAudioEnabled((prev) => !prev)
+            }}
+            className={cn(
+              "px-3 py-1.5 text-xs font-bold rounded-xl border transition-colors",
+              audioEnabled
+                ? "border-primary/40 bg-primary/15 text-primary"
+                : "border-outline-variant/30 bg-surface-container-highest text-on-surface-variant hover:text-on-surface",
+            )}
+          >
+            Audio {audioEnabled ? "On" : "Off"}
+          </button>
           <button
             className="px-4 py-1.5 text-xs font-bold rounded-xl bg-surface-container-highest text-on-surface hover:bg-surface-bright transition-colors active:scale-[0.97] disabled:opacity-40"
             onClick={handleFinishClick}
@@ -344,6 +402,38 @@ export default function SessionPage() {
 
           <div className="w-1/2 flex flex-col bg-surface-container-lowest">
             <div className="p-4 border-b border-border bg-surface-container-low">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div className="flex items-center gap-2">
+                  <div
+                    className={cn(
+                      "relative h-11 w-11 rounded-full border flex items-center justify-center",
+                      avatarSpeaking
+                        ? "border-primary/50 bg-primary/15"
+                        : "border-outline-variant/30 bg-surface-container-highest",
+                    )}
+                    aria-label={avatarSpeaking ? "Avatar speaking" : "Avatar idle"}
+                  >
+                    <span className="material-symbols-outlined text-xl text-on-surface-variant">face</span>
+                    <span
+                      className={cn(
+                        "absolute -bottom-1 h-1.5 rounded-full bg-primary transition-all duration-150",
+                        avatarSpeaking ? "w-4 animate-pulse" : "w-2 opacity-70",
+                      )}
+                    />
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-outline">
+                      Interviewer Avatar
+                    </span>
+                    <span className={cn("text-xs", avatarSpeaking ? "text-primary" : "text-on-surface-variant")}>
+                      {avatarSpeaking ? "Speaking..." : "Idle"}
+                    </span>
+                  </div>
+                </div>
+                {avatarSpeaking && (
+                  <span className="material-symbols-outlined text-primary animate-pulse">graphic_eq</span>
+                )}
+              </div>
               <div className="flex items-center gap-2 mb-2">
                 <h2 className="text-base font-bold text-on-surface">
                   {session?.company ?? "Coding Problem"}
@@ -407,13 +497,13 @@ export default function SessionPage() {
                   type="button"
                   onClick={handleMicToggle}
                   title={isSpeechSupported ? "Toggle microphone" : "Mic not supported"}
-                  disabled={streaming || !isSpeechSupported}
+                  disabled={streaming || !isSpeechSupported || avatarSpeaking}
                   className={cn(
                     "relative p-2 rounded-xl border transition-colors active:scale-[0.97] shrink-0 self-end",
                     isListening
                       ? "border-red-400/60 bg-red-500/10 text-red-300"
                       : "border-outline-variant/30 bg-surface-container-highest text-on-surface-variant hover:text-on-surface",
-                    (!isSpeechSupported || streaming) && "opacity-50 cursor-not-allowed",
+                    (!isSpeechSupported || streaming || avatarSpeaking) && "opacity-50 cursor-not-allowed",
                   )}
                 >
                   <span className="material-symbols-outlined text-sm">mic</span>

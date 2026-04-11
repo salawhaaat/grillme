@@ -160,6 +160,15 @@ async function del<T>(path: string): Promise<T> {
   return res.json()
 }
 
+async function postBlob(path: string): Promise<Blob> {
+  const res = await fetch(`${BASE}${path}`, { method: "POST" })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.blob()
+}
+
 function normalizeScorecard(raw: RawScorecard | null): Scorecard | null {
   if (!raw || typeof raw.overall_score !== "number") return null
   const areasToImprove = raw.areas_to_improve ?? raw.improvements ?? []
@@ -237,6 +246,9 @@ export const api = {
     test_result?: TestResult | null,
   ) =>
     post<{ ok: boolean }>("/code/share", { session_id, code, run_result: run_result ?? undefined, test_result: test_result ?? undefined }),
+
+  speakSession: (sessionId: number) =>
+    postBlob(`/voice/speak-session/${sessionId}`),
 }
 
 export async function* streamMessage(
