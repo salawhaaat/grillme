@@ -11,6 +11,7 @@ import {
 } from "@/lib/api/client"
 import { cn } from "@/lib/utils"
 import { Sidebar } from "@/components/Sidebar"
+import { useSpeechRecognition } from "@/lib/hooks/useSpeechRecognition"
 
 function useTimer(initialSeconds = 45 * 60) {
   const [seconds, setSeconds] = useState(initialSeconds)
@@ -42,6 +43,15 @@ export default function SessionPage() {
   const [terminalTab, setTerminalTab] = useState<"console" | "tests">("console")
   const [running, setRunning] = useState(false)
   const [showClosingPrompt, setShowClosingPrompt] = useState(false)
+  const [speechInputActive, setSpeechInputActive] = useState(false)
+
+  const {
+    transcript,
+    isListening,
+    start: startListening,
+    stop: stopListening,
+    isSupported: isSpeechSupported,
+  } = useSpeechRecognition()
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -68,6 +78,11 @@ export default function SessionPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
+
+  useEffect(() => {
+    if (!speechInputActive) return
+    setInput(transcript)
+  }, [transcript, speechInputActive])
 
   async function handleRunCode() {
     if (!code.trim()) return
@@ -122,6 +137,8 @@ export default function SessionPage() {
     setInput("")
     setStreaming(true)
     setError(null)
+    setSpeechInputActive(false)
+    if (isListening) stopListening()
 
     try {
       let full = ""
@@ -147,6 +164,17 @@ export default function SessionPage() {
       e.preventDefault()
       handleSend()
     }
+  }
+
+  function handleMicToggle() {
+    if (!isSpeechSupported) return
+    if (isListening) {
+      stopListening()
+      setSpeechInputActive(false)
+      return
+    }
+    setSpeechInputActive(true)
+    startListening()
   }
 
   function handleFinishClick() {
@@ -375,6 +403,27 @@ export default function SessionPage() {
                   disabled={streaming}
                   rows={2}
                 />
+                <button
+                  type="button"
+                  onClick={handleMicToggle}
+                  title={isSpeechSupported ? "Toggle microphone" : "Mic not supported"}
+                  disabled={streaming || !isSpeechSupported}
+                  className={cn(
+                    "relative p-2 rounded-xl border transition-colors active:scale-[0.97] shrink-0 self-end",
+                    isListening
+                      ? "border-red-400/60 bg-red-500/10 text-red-300"
+                      : "border-outline-variant/30 bg-surface-container-highest text-on-surface-variant hover:text-on-surface",
+                    (!isSpeechSupported || streaming) && "opacity-50 cursor-not-allowed",
+                  )}
+                >
+                  <span className="material-symbols-outlined text-sm">mic</span>
+                  {isListening && (
+                    <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+                      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+                    </span>
+                  )}
+                </button>
                 <button
                   onClick={handleSend}
                   disabled={streaming || !input.trim()}
