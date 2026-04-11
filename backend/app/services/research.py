@@ -36,6 +36,21 @@ class ResearchService:
         count = min(len(titles), len(snippets))
         return [{"title": titles[i], "snippet": snippets[i]} for i in range(count)]
 
+    async def _search_github(
+        self, company: str, role: str, timeout: int = 10
+    ) -> list[dict[str, str]]:
+        """Search DuckDuckGo for GitHub discussions/issues/gists mentioning the company's interview."""
+        query = f"site:github.com {company} {role} interview"
+        url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=timeout)
+            response.raise_for_status()
+
+        titles = [_strip_html(m) for m in TITLE_PATTERN.findall(response.text)]
+        snippets = [_strip_html(m) for m in SNIPPET_PATTERN.findall(response.text)]
+        count = min(len(titles), len(snippets))
+        return [{"title": titles[i], "snippet": snippets[i]} for i in range(count)]
+
     async def search(self, company: str, role: str) -> dict:
         cache_key = f"{company}|{role}"
         if cache_key in _cache:
@@ -47,6 +62,7 @@ class ResearchService:
         source_results = await asyncio.gather(
             self._search_source(reddit_query, timeout=10),
             self._search_source(glassdoor_query, timeout=10),
+            self._search_github(company, role, timeout=10),
             return_exceptions=True,
         )
 
