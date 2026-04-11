@@ -51,6 +51,15 @@ export default function FeedbackPage() {
     )
   }
 
+  const userMessages = useMemo(
+    () => (session?.messages ?? []).filter((m) => m.role === "user"),
+    [session?.messages],
+  )
+  const aiMessages = useMemo(
+    () => (session?.messages ?? []).filter((m) => m.role === "assistant"),
+    [session?.messages],
+  )
+
   if (error || !session || !scorecard) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -60,8 +69,6 @@ export default function FeedbackPage() {
   }
 
   const diff = DIFFICULTY_META[session.difficulty]
-  const userMessages = useMemo(() => session.messages.filter((m) => m.role === "user"), [session.messages])
-  const aiMessages = useMemo(() => session.messages.filter((m) => m.role === "assistant"), [session.messages])
 
   return (
     <div className="h-screen overflow-hidden flex flex-col bg-background">

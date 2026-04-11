@@ -39,6 +39,25 @@
     background-image: radial-gradient(rgba(155, 156, 158, 0.15) 1px, transparent 0);
     background-size: 24px 24px;
   }
+
+  .bar-wave {
+    animation: bar-wave 0.7s ease-in-out infinite;
+    transform-origin: bottom;
+  }
+
+  .pip-idle {
+    animation: pip-idle 3s ease-in-out infinite;
+  }
+}
+
+@keyframes bar-wave {
+  0%, 100% { transform: scaleY(0.3); }
+  50% { transform: scaleY(1); }
+}
+
+@keyframes pip-idle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.04); }
 }
 
 /* Material Symbols */

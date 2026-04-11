@@ -10,6 +10,9 @@ interface Settings {
   sessionTimeoutMins: number
   soundEnabled: boolean
   autoScroll: boolean
+  voiceOutputEnabled: boolean
+  voiceName: "en-US-GuyNeural" | "en-US-JennyNeural" | "en-US-AriaNeural"
+  autoSendVoiceInput: boolean
 }
 
 const DEFAULTS: Settings = {
@@ -20,6 +23,9 @@ const DEFAULTS: Settings = {
   sessionTimeoutMins: 45,
   soundEnabled: false,
   autoScroll: true,
+  voiceOutputEnabled: false,
+  voiceName: "en-US-GuyNeural",
+  autoSendVoiceInput: false,
 }
 
 function load(): Settings {
@@ -230,6 +236,32 @@ export default function SettingsPage() {
                 <Toggle
                   checked={settings.soundEnabled}
                   onChange={(v) => update("soundEnabled", v)}
+                />
+              </Row>
+            </Section>
+
+            <Section title="Voice">
+              <Row label="Voice output" description="Play interviewer responses as audio">
+                <Toggle
+                  checked={settings.voiceOutputEnabled}
+                  onChange={(v) => update("voiceOutputEnabled", v)}
+                />
+              </Row>
+              <Row label="Voice selection" description="Pick interviewer voice">
+                <select
+                  value={settings.voiceName}
+                  onChange={(e) => update("voiceName", e.target.value as Settings["voiceName"])}
+                  className="px-3 py-1.5 text-xs rounded-lg border border-outline-variant/30 bg-surface-container-highest text-on-surface focus:outline-none"
+                >
+                  <option value="en-US-GuyNeural">GuyNeural</option>
+                  <option value="en-US-JennyNeural">JennyNeural</option>
+                  <option value="en-US-AriaNeural">AriaNeural</option>
+                </select>
+              </Row>
+              <Row label="Auto-send voice input" description="Send message automatically when mic stops">
+                <Toggle
+                  checked={settings.autoSendVoiceInput}
+                  onChange={(v) => update("autoSendVoiceInput", v)}
                 />
               </Row>
             </Section>

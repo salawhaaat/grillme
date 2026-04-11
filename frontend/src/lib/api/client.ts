@@ -247,8 +247,12 @@ export const api = {
   ) =>
     post<{ ok: boolean }>("/code/share", { session_id, code, run_result: run_result ?? undefined, test_result: test_result ?? undefined }),
 
-  speakSession: (sessionId: number) =>
-    postBlob(`/voice/speak-session/${sessionId}`),
+  speakSession: (sessionId: number, voice?: string) =>
+    postBlob(
+      `/voice/speak-session/${sessionId}${
+        voice ? `?voice=${encodeURIComponent(voice)}` : ""
+      }`,
+    ),
 }
 
 export async function* streamMessage(

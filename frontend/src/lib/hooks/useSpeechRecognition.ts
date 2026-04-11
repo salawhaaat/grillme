@@ -35,6 +35,7 @@ export function useSpeechRecognition() {
   const [isListening, setIsListening] = useState(false)
   const recognitionRef = useRef<RecognitionLike | null>(null)
   const finalRef = useRef("")
+  const startedRef = useRef(false)
 
   const Recognition = useMemo(
     () => window.SpeechRecognition ?? window.webkitSpeechRecognition,
@@ -45,11 +46,12 @@ export function useSpeechRecognition() {
   useEffect(() => {
     if (!Recognition) return
     const recognition = new Recognition()
-    recognition.continuous = true
+    recognition.continuous = false
     recognition.interimResults = true
     recognition.lang = "en-US"
 
     recognition.onstart = () => {
+      startedRef.current = true
       setIsListening(true)
     }
 
@@ -67,10 +69,12 @@ export function useSpeechRecognition() {
     }
 
     recognition.onerror = () => {
+      startedRef.current = false
       setIsListening(false)
     }
 
     recognition.onend = () => {
+      startedRef.current = false
       setIsListening(false)
       setTranscript(finalRef.current.trim())
     }
@@ -83,16 +87,23 @@ export function useSpeechRecognition() {
   }, [Recognition])
 
   const start = useCallback(() => {
-    if (!recognitionRef.current || isListening) return
+    if (!recognitionRef.current || startedRef.current) return
     finalRef.current = ""
     setTranscript("")
-    recognitionRef.current.start()
-  }, [isListening])
+    startedRef.current = true
+    try {
+      recognitionRef.current.start()
+    } catch {
+      startedRef.current = false
+    }
+  }, [])
 
   const stop = useCallback(() => {
-    if (!recognitionRef.current || !isListening) return
-    recognitionRef.current.stop()
-  }, [isListening])
+    if (!recognitionRef.current || !startedRef.current) return
+    try {
+      recognitionRef.current.stop()
+    } catch { /* ignore */ }
+  }, [])
 
   return { transcript, isListening, start, stop, isSupported }
 }

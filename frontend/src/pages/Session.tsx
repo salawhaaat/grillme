@@ -4,7 +4,6 @@ import Editor from "@monaco-editor/react"
 import {
   api,
   streamMessage,
-  type Message,
   type RunResult,
   type Session,
   type TestResult,
@@ -24,16 +23,46 @@ function useTimer(initialSeconds = 45 * 60) {
   return `${m}:${s}`
 }
 
+function useDraggable(initialPos: { x: number; y: number }) {
+  const [pos, setPos] = useState(initialPos)
+  const dragging = useRef(false)
+  const offset = useRef({ x: 0, y: 0 })
+  const posRef = useRef(initialPos)
+  posRef.current = pos
+
+  function onMouseDown(e: React.MouseEvent) {
+    dragging.current = true
+    offset.current = { x: e.clientX - posRef.current.x, y: e.clientY - posRef.current.y }
+    e.preventDefault()
+  }
+
+  function onTouchStart(e: React.TouchEvent) {
+    const touch = e.touches[0]
+    dragging.current = true
+    offset.current = { x: touch.clientX - posRef.current.x, y: touch.clientY - posRef.current.y }
+  }
+
+  const handleMove = (x: number, y: number) => {
+    if (!dragging.current) return
+    setPos({ x: x - offset.current.x, y: y - offset.current.y })
+  }
+
+  const stopDragging = () => { dragging.current = false }
+
+  return { pos, onMouseDown, onTouchStart, handleMove, stopDragging }
+}
+
 export default function SessionPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const location = useLocation()
   const sessionId = Number(id)
   const timer = useTimer()
+  const pip = useDraggable({ x: window.innerWidth - 280, y: 80 })
 
   const [session, setSession] = useState<Session | null>(null)
-  const [messages, setMessages] = useState<Message[]>([])
-  const [input, setInput] = useState("")
+  const [problemStatement, setProblemStatement] = useState("")
+  const [problemCollapsed, setProblemCollapsed] = useState(false)
   const [streaming, setStreaming] = useState(false)
   const [finishing, setFinishing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -43,9 +72,11 @@ export default function SessionPage() {
   const [terminalTab, setTerminalTab] = useState<"console" | "tests">("console")
   const [running, setRunning] = useState(false)
   const [showClosingPrompt, setShowClosingPrompt] = useState(false)
-  const [speechInputActive, setSpeechInputActive] = useState(false)
   const [audioEnabled, setAudioEnabled] = useState(false)
   const [avatarSpeaking, setAvatarSpeaking] = useState(false)
+  const [voiceName, setVoiceName] = useState<
+    "en-US-GuyNeural" | "en-US-JennyNeural" | "en-US-AriaNeural"
+  >("en-US-GuyNeural")
 
   const {
     transcript,
@@ -55,20 +86,21 @@ export default function SessionPage() {
     isSupported: isSpeechSupported,
   } = useSpeechRecognition()
 
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLTextAreaElement>(null)
   const activeAudioRef = useRef<HTMLAudioElement | null>(null)
+  const pendingTranscriptRef = useRef("")
+  const hasPlayedOpeningRef = useRef(false)
 
+  // Load session
   useEffect(() => {
     api.getSession(sessionId).then((s) => {
       setSession(s)
-      const navState = location.state as { openingMessage?: string; starterCode?: string } | null
-      const openingFromNav = navState?.openingMessage
+      const navState = location.state as { openingMessage?: string; starterCode?: string; problemStatement?: string } | null
       const starterFromNav = navState?.starterCode
-      if (s.messages.length > 0) {
-        setMessages(s.messages.filter((m) => m.role !== "system"))
-      } else if (openingFromNav) {
-        setMessages([{ role: "assistant", content: openingFromNav }])
+      const problemFromNav = navState?.problemStatement
+      if (s.problem_statement) {
+        setProblemStatement(s.problem_statement)
+      } else if (problemFromNav) {
+        setProblemStatement(problemFromNav)
       }
       if (s.starter_code) {
         setCode(s.starter_code)
@@ -78,15 +110,50 @@ export default function SessionPage() {
     })
   }, [sessionId, location.state])
 
+  // Load settings
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+    try {
+      const raw = localStorage.getItem("grillme_settings")
+      if (!raw) return
+      const parsed = JSON.parse(raw) as {
+        voiceOutputEnabled?: boolean
+        voiceName?: "en-US-GuyNeural" | "en-US-JennyNeural" | "en-US-AriaNeural"
+      }
+      setAudioEnabled(Boolean(parsed.voiceOutputEnabled))
+      if (parsed.voiceName) setVoiceName(parsed.voiceName)
+    } catch { /* ignore */ }
+  }, [])
 
+  // Auto-play opening message once when session + audio are ready
   useEffect(() => {
-    if (!speechInputActive) return
-    setInput(transcript)
-  }, [transcript, speechInputActive])
+    if (!audioEnabled || !session || hasPlayedOpeningRef.current) return
+    hasPlayedOpeningRef.current = true
+    void playAssistantAudio()
+  }, [session, audioEnabled]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Pause mic while avatar speaks/streaming; restart after each phrase (continuous: false)
+  useEffect(() => {
+    if (!isSpeechSupported) return
+    if (avatarSpeaking || streaming) {
+      stopListening()
+    } else {
+      startListening()
+    }
+  }, [avatarSpeaking, streaming, isSpeechSupported]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-send when mic captures speech and goes silent
+  useEffect(() => {
+    if (isListening) {
+      pendingTranscriptRef.current = transcript
+      return
+    }
+    const text = pendingTranscriptRef.current.trim()
+    if (!text || streaming || avatarSpeaking) return
+    pendingTranscriptRef.current = ""
+    void handleSend(text)
+  }, [isListening]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cleanup audio on unmount
   useEffect(() => {
     return () => {
       if (activeAudioRef.current) {
@@ -99,22 +166,14 @@ export default function SessionPage() {
   async function playAssistantAudio() {
     if (!audioEnabled) return
     try {
-      const blob = await api.speakSession(sessionId)
-      if (activeAudioRef.current) {
-        activeAudioRef.current.pause()
-      }
+      const blob = await api.speakSession(sessionId, voiceName)
+      if (activeAudioRef.current) activeAudioRef.current.pause()
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
       activeAudioRef.current = audio
       setAvatarSpeaking(true)
-      audio.onended = () => {
-        URL.revokeObjectURL(url)
-        setAvatarSpeaking(false)
-      }
-      audio.onerror = () => {
-        URL.revokeObjectURL(url)
-        setAvatarSpeaking(false)
-      }
+      audio.onended = () => { URL.revokeObjectURL(url); setAvatarSpeaking(false) }
+      audio.onerror = () => { URL.revokeObjectURL(url); setAvatarSpeaking(false) }
       await audio.play()
     } catch {
       setAvatarSpeaking(false)
@@ -130,13 +189,7 @@ export default function SessionPage() {
       setRunResult(result)
       api.shareCode(sessionId, code, result, undefined).catch(() => {})
     } catch (e) {
-      setRunResult({
-        stdout: "",
-        stderr: e instanceof Error ? e.message : "Error",
-        exit_code: -1,
-        runtime_ms: 0,
-        timed_out: false,
-      })
+      setRunResult({ stdout: "", stderr: e instanceof Error ? e.message : "Error", exit_code: -1, runtime_ms: 0, timed_out: false })
     } finally {
       setRunning(false)
     }
@@ -160,60 +213,23 @@ export default function SessionPage() {
   function handleEditorKeyDown(e: React.KeyboardEvent) {
     if (!(e.metaKey || e.ctrlKey) || e.key !== "Enter") return
     e.preventDefault()
-    if (e.shiftKey) {
-      void handleRunTests()
-    } else {
-      void handleRunCode()
-    }
+    if (e.shiftKey) void handleRunTests()
+    else void handleRunCode()
   }
 
-  async function handleSend() {
-    if (!input.trim() || streaming) return
-    const userMsg: Message = { role: "user", content: input.trim() }
-    setMessages((prev) => [...prev, userMsg, { role: "assistant", content: "" }])
-    setInput("")
+  async function handleSend(text: string) {
+    if (!text || streaming) return
     setStreaming(true)
     setError(null)
-    setSpeechInputActive(false)
-    if (isListening) stopListening()
-
     try {
-      let full = ""
-      for await (const chunk of streamMessage(sessionId, userMsg.content)) {
-        full += chunk
-        setMessages((prev) => {
-          const updated = [...prev]
-          updated[updated.length - 1] = { role: "assistant", content: full }
-          return updated
-        })
-      }
+      // consume stream but don't display chat
+      for await (const _ of streamMessage(sessionId, text)) { /* voice only */ }
       await playAssistantAudio()
     } catch (e) {
       setError(e instanceof Error ? e.message : "Stream error")
-      setMessages((prev) => prev.slice(0, -1))
     } finally {
       setStreaming(false)
-      inputRef.current?.focus()
     }
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
-  }
-
-  function handleMicToggle() {
-    if (!isSpeechSupported) return
-    if (avatarSpeaking) return
-    if (isListening) {
-      stopListening()
-      setSpeechInputActive(false)
-      return
-    }
-    setSpeechInputActive(true)
-    startListening()
   }
 
   function handleFinishClick() {
@@ -244,9 +260,7 @@ export default function SessionPage() {
         </div>
         <div className="flex items-center gap-4 ml-auto">
           <div className="flex items-center gap-2 bg-surface-container-low px-3 py-1.5 rounded-xl border border-outline-variant/20">
-            <span className="material-symbols-outlined text-tertiary text-lg" style={{ fontVariationSettings: "'FILL' 1" }}>
-              timer
-            </span>
+            <span className="material-symbols-outlined text-tertiary text-lg" style={{ fontVariationSettings: "'FILL' 1" }}>timer</span>
             <span className="font-mono text-sm font-bold tracking-tight text-on-surface">{timer}</span>
           </div>
           <button
@@ -257,27 +271,22 @@ export default function SessionPage() {
                 activeAudioRef.current = null
                 setAvatarSpeaking(false)
               }
-              setAudioEnabled((prev) => !prev)
+              setAudioEnabled((prev) => {
+                const next = !prev
+                try {
+                  const raw = localStorage.getItem("grillme_settings")
+                  const current = raw ? JSON.parse(raw) : {}
+                  localStorage.setItem("grillme_settings", JSON.stringify({ ...current, voiceOutputEnabled: next }))
+                } catch { /* ignore */ }
+                return next
+              })
             }}
             className={cn(
               "px-3 py-1.5 text-xs font-bold rounded-xl border transition-colors",
-              audioEnabled
-                ? "border-primary/40 bg-primary/15 text-primary"
-                : "border-outline-variant/30 bg-surface-container-highest text-on-surface-variant hover:text-on-surface",
+              audioEnabled ? "border-primary/40 bg-primary/15 text-primary" : "border-outline-variant/30 bg-surface-container-highest text-on-surface-variant hover:text-on-surface",
             )}
           >
             Audio {audioEnabled ? "On" : "Off"}
-          </button>
-          <button
-            className="px-4 py-1.5 text-xs font-bold rounded-xl bg-surface-container-highest text-on-surface hover:bg-surface-bright transition-colors active:scale-[0.97] disabled:opacity-40"
-            onClick={handleFinishClick}
-            disabled={finishing || messages.length < 2}
-          >
-            {finishing ? (
-              <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
-            ) : (
-              "Finish & Score"
-            )}
           </button>
         </div>
       </header>
@@ -286,26 +295,79 @@ export default function SessionPage() {
         <Sidebar activePage="home" />
 
         <div className="flex flex-1 overflow-hidden">
-          <div className="w-1/2 border-r border-border bg-surface-container-low flex flex-col">
+          {/* LEFT — collapsible problem statement */}
+          <div className="w-2/5 border-r border-border bg-surface-container-low flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-2 bg-surface-container-low border-b border-border shrink-0">
+              <button
+                onClick={() => setProblemCollapsed((c) => !c)}
+                className="flex items-center gap-2"
+              >
+                <span className="material-symbols-outlined text-primary text-base" style={{ fontVariationSettings: "'FILL' 1" }}>
+                  {problemCollapsed ? "chevron_right" : "expand_more"}
+                </span>
+                <span className="text-xs font-bold text-on-surface uppercase tracking-widest">Coding Problem</span>
+              </button>
+              {session?.difficulty && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-primary/10 text-primary border border-primary/30">
+                  {session.difficulty}
+                </span>
+              )}
+            </div>
+
+            {!problemCollapsed && (
+              <div className="flex-1 overflow-y-auto no-scrollbar p-4">
+                <p className="text-sm text-on-surface whitespace-pre-wrap leading-relaxed">
+                  {problemStatement || (location.state as { problemStatement?: string } | null)?.problemStatement || "Loading problem..."}
+                </p>
+              </div>
+            )}
+
+            {error && (
+              <div className="mx-4 mb-3 flex items-center gap-2 text-error text-xs px-3 py-2 bg-error-container/10 rounded-xl border border-error/20 shrink-0">
+                <span className="material-symbols-outlined text-sm">error</span>
+                {error}
+              </div>
+            )}
+
+            {/* Live transcript */}
+            <div className="px-4 py-3 border-t border-border shrink-0 min-h-[52px] flex items-center">
+              {isListening && transcript ? (
+                <p className="text-xs text-blue-300 italic leading-relaxed line-clamp-2">"{transcript}"</p>
+              ) : isListening ? (
+                <div className="flex items-center gap-2">
+                  {[0, 100, 200].map((delay) => (
+                    <div key={delay} className="w-0.5 rounded-full bar-wave bg-blue-400/60" style={{ animationDelay: `${delay}ms`, height: "8px" }} />
+                  ))}
+                  <span className="text-xs text-blue-400/60">Listening…</span>
+                </div>
+              ) : streaming ? (
+                <span className="text-xs text-on-surface-variant/60">Thinking…</span>
+              ) : (
+                <span className="text-xs text-outline/30">Speak to respond</span>
+              )}
+            </div>
+          </div>
+
+          {/* RIGHT — Monaco editor + console + Finish button */}
+          <div className="flex-1 flex flex-col bg-surface-container-lowest overflow-hidden">
             <div className="flex items-center justify-between px-4 py-2 bg-surface-container-low border-b border-border shrink-0">
               <div className="flex items-center gap-2 px-3 py-1 bg-surface-container-highest rounded-lg text-xs font-semibold text-on-surface border border-outline-variant/20">
                 <span className="w-2 h-2 rounded-full bg-blue-400" />
                 Python 3.13
               </div>
               <div className="flex gap-2">
-                <button
-                  onClick={handleRunCode}
-                  disabled={running || !code.trim()}
-                  className="px-3 py-1 text-xs font-semibold rounded-lg bg-surface-container-highest text-on-surface-variant hover:bg-surface-bright transition-colors disabled:opacity-40"
-                >
+                <button onClick={handleRunCode} disabled={running || !code.trim()} className="px-3 py-1 text-xs font-semibold rounded-lg bg-surface-container-highest text-on-surface-variant hover:bg-surface-bright transition-colors disabled:opacity-40">
                   Run Code
                 </button>
-                <button
-                  onClick={handleRunTests}
-                  disabled={running || !code.trim() || !session?.test_cases}
-                  className="px-3 py-1 text-xs font-semibold rounded-lg bg-primary/20 text-primary hover:bg-primary/30 transition-colors disabled:opacity-40"
-                >
+                <button onClick={handleRunTests} disabled={running || !code.trim() || !session?.test_cases} className="px-3 py-1 text-xs font-semibold rounded-lg bg-primary/20 text-primary hover:bg-primary/30 transition-colors disabled:opacity-40">
                   Run Tests
+                </button>
+                <button
+                  className="px-3 py-1 text-xs font-bold rounded-lg bg-surface-container-highest text-on-surface hover:bg-surface-bright transition-colors active:scale-[0.97] disabled:opacity-40"
+                  onClick={handleFinishClick}
+                  disabled={finishing}
+                >
+                  {finishing ? <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span> : "Finish & Score"}
                 </button>
               </div>
             </div>
@@ -318,216 +380,102 @@ export default function SessionPage() {
                   theme="vs-dark"
                   value={code}
                   onChange={(v) => setCode(v ?? "")}
-                  options={{
-                    fontSize: 13,
-                    minimap: { enabled: false },
-                    lineNumbers: "on",
-                    scrollBeyondLastLine: false,
-                    automaticLayout: true,
-                  }}
+                  options={{ fontSize: 13, minimap: { enabled: false }, lineNumbers: "on", scrollBeyondLastLine: false, automaticLayout: true }}
                 />
               </div>
             </div>
 
-            <div className="h-[30%] flex flex-col">
-              <div className="flex items-center gap-3 px-4 py-1.5 border-b border-border bg-surface-container-low">
-                <button
-                  className={cn(
-                    "text-[10px] font-bold uppercase tracking-widest",
-                    terminalTab === "console"
-                      ? "text-primary border-b border-primary"
-                      : "text-outline hover:text-on-surface",
-                  )}
-                  onClick={() => setTerminalTab("console")}
-                >
-                  Console
-                </button>
-                <button
-                  className={cn(
-                    "text-[10px] font-bold uppercase tracking-widest",
-                    terminalTab === "tests"
-                      ? "text-primary border-b border-primary"
-                      : "text-outline hover:text-on-surface",
-                  )}
-                  onClick={() => setTerminalTab("tests")}
-                >
-                  Test Results
-                </button>
+            <div className="flex-1 flex flex-col min-h-0">
+              <div className="flex items-center gap-3 px-4 py-1.5 border-b border-border bg-surface-container-low shrink-0">
+                <button className={cn("text-[10px] font-bold uppercase tracking-widest", terminalTab === "console" ? "text-primary border-b border-primary" : "text-outline hover:text-on-surface")} onClick={() => setTerminalTab("console")}>Console</button>
+                <button className={cn("text-[10px] font-bold uppercase tracking-widest", terminalTab === "tests" ? "text-primary border-b border-primary" : "text-outline hover:text-on-surface")} onClick={() => setTerminalTab("tests")}>Test Results</button>
               </div>
               <div className="flex-1 overflow-y-auto no-scrollbar p-4 font-mono text-xs">
                 {terminalTab === "console" ? (
                   runResult ? (
                     <div className="space-y-2">
-                      {runResult.timed_out && (
-                        <div className="rounded-md border border-yellow-500/40 bg-yellow-500/10 px-2 py-1 text-yellow-300">
-                          Execution timed out (10s limit)
-                        </div>
-                      )}
+                      {runResult.timed_out && <div className="rounded-md border border-yellow-500/40 bg-yellow-500/10 px-2 py-1 text-yellow-300">Execution timed out (10s limit)</div>}
                       {runResult.stdout && <pre className="whitespace-pre-wrap text-on-surface">{runResult.stdout}</pre>}
                       {runResult.stderr && <pre className="whitespace-pre-wrap text-error">{runResult.stderr}</pre>}
-                      {!runResult.stdout && !runResult.stderr && (
-                        <p className="text-outline">No output.</p>
-                      )}
+                      {!runResult.stdout && !runResult.stderr && <p className="text-outline">No output.</p>}
                       <p className="text-on-surface-variant">Exit: {runResult.exit_code} · {runResult.runtime_ms}ms</p>
                     </div>
-                  ) : (
-                    <p className="text-outline">Run your code to see output</p>
-                  )
+                  ) : <p className="text-outline">Run your code to see output</p>
                 ) : testResult ? (
                   <div className="space-y-2">
-                    <p className="text-on-surface-variant font-semibold">
-                      {testResult.passed}/{testResult.total} passed · {testResult.runtime_ms}ms
-                    </p>
+                    <p className="text-on-surface-variant font-semibold">{testResult.passed}/{testResult.total} passed · {testResult.runtime_ms}ms</p>
                     {testResult.results.map((r) => (
                       <div key={r.id} className={cn("rounded-md px-2 py-1", r.passed ? "bg-green-500/10" : "bg-red-500/10")}>
-                        <p className={cn("font-semibold", r.passed ? "text-green-400" : "text-red-400")}>
-                          {r.passed ? "✓" : "✗"} Test {r.id}
-                        </p>
-                        {r.error ? (
-                          <p className="text-red-400">input={r.input} → error: {r.error}</p>
-                        ) : (
-                          <p className="text-on-surface-variant">
-                            input={r.input} → expected {r.expected}, got {r.actual}
-                          </p>
-                        )}
+                        <p className={cn("font-semibold", r.passed ? "text-green-400" : "text-red-400")}>{r.passed ? "✓" : "✗"} Test {r.id}</p>
+                        {r.error ? <p className="text-red-400">input={r.input} → error: {r.error}</p> : <p className="text-on-surface-variant">input={r.input} → expected {r.expected}, got {r.actual}</p>}
                       </div>
                     ))}
                   </div>
-                ) : (
-                  <p className="text-outline">Run tests to see results</p>
-                )}
+                ) : <p className="text-outline">Run tests to see results</p>}
               </div>
             </div>
           </div>
+        </div>
+      </div>
 
-          <div className="w-1/2 flex flex-col bg-surface-container-lowest">
-            <div className="p-4 border-b border-border bg-surface-container-low">
-              <div className="flex items-center justify-between gap-3 mb-2">
-                <div className="flex items-center gap-2">
-                  <div
-                    className={cn(
-                      "relative h-11 w-11 rounded-full border flex items-center justify-center",
-                      avatarSpeaking
-                        ? "border-primary/50 bg-primary/15"
-                        : "border-outline-variant/30 bg-surface-container-highest",
-                    )}
-                    aria-label={avatarSpeaking ? "Avatar speaking" : "Avatar idle"}
-                  >
-                    <span className="material-symbols-outlined text-xl text-on-surface-variant">face</span>
-                    <span
-                      className={cn(
-                        "absolute -bottom-1 h-1.5 rounded-full bg-primary transition-all duration-150",
-                        avatarSpeaking ? "w-4 animate-pulse" : "w-2 opacity-70",
-                      )}
-                    />
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-outline">
-                      Interviewer Avatar
-                    </span>
-                    <span className={cn("text-xs", avatarSpeaking ? "text-primary" : "text-on-surface-variant")}>
-                      {avatarSpeaking ? "Speaking..." : "Idle"}
-                    </span>
-                  </div>
-                </div>
-                {avatarSpeaking && (
-                  <span className="material-symbols-outlined text-primary animate-pulse">graphic_eq</span>
-                )}
-              </div>
-              <div className="flex items-center gap-2 mb-2">
-                <h2 className="text-base font-bold text-on-surface">
-                  {session?.company ?? "Coding Problem"}
-                </h2>
-                {session?.difficulty && (
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-primary/10 text-primary border border-primary/30">
-                    {session.difficulty}
-                  </span>
-                )}
-              </div>
-              <p className="text-sm text-on-surface-variant whitespace-pre-wrap">
-                {session?.problem_statement || (location.state as { problemStatement?: string } | null)?.problemStatement || "Loading problem..."}
-              </p>
-            </div>
-
-            <div className="flex-1 overflow-y-auto no-scrollbar px-6 py-4 space-y-4 font-body text-sm">
-              {messages.length === 0 && (
-                <div className="h-full flex items-center justify-center text-outline text-sm">
-                  Loading session…
-                </div>
-              )}
-              {messages.map((msg, i) => (
-                <div key={i} className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
-                  <div
-                    className={cn(
-                      "max-w-[78%] rounded-2xl px-4 py-3 leading-relaxed whitespace-pre-wrap text-sm",
-                      msg.role === "user"
-                        ? "bg-primary/10 text-primary border border-primary/15 rounded-br-sm"
-                        : "bg-surface-container text-on-surface border border-outline-variant/15 rounded-bl-sm",
-                    )}
-                  >
-                    {msg.content}
-                    {streaming && i === messages.length - 1 && msg.role === "assistant" && (
-                      <span className="inline-block w-1.5 h-4 ml-0.5 bg-primary/60 animate-pulse align-middle rounded-sm" />
-                    )}
-                  </div>
-                </div>
-              ))}
-              {error && (
-                <div className="flex items-center gap-2 text-error text-xs px-3 py-2 bg-error-container/10 rounded-xl border border-error/20">
-                  <span className="material-symbols-outlined text-sm">error</span>
-                  {error}
-                </div>
-              )}
-              <div ref={bottomRef} />
-            </div>
-
-            <div className="border-t border-border bg-surface-container-low shrink-0">
-              <div className="flex items-end gap-2 p-4">
-                <textarea
-                  ref={inputRef}
-                  className="flex-1 bg-transparent font-mono text-sm text-on-surface placeholder:text-outline resize-none focus:outline-none min-h-[40px] max-h-[140px]"
-                  placeholder="Your answer…"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  disabled={streaming}
-                  rows={2}
-                />
-                <button
-                  type="button"
-                  onClick={handleMicToggle}
-                  title={isSpeechSupported ? "Toggle microphone" : "Mic not supported"}
-                  disabled={streaming || !isSpeechSupported || avatarSpeaking}
-                  className={cn(
-                    "relative p-2 rounded-xl border transition-colors active:scale-[0.97] shrink-0 self-end",
-                    isListening
-                      ? "border-red-400/60 bg-red-500/10 text-red-300"
-                      : "border-outline-variant/30 bg-surface-container-highest text-on-surface-variant hover:text-on-surface",
-                    (!isSpeechSupported || streaming || avatarSpeaking) && "opacity-50 cursor-not-allowed",
-                  )}
-                >
-                  <span className="material-symbols-outlined text-sm">mic</span>
-                  {isListening && (
-                    <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-                      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
-                    </span>
-                  )}
-                </button>
-                <button
-                  onClick={handleSend}
-                  disabled={streaming || !input.trim()}
-                  className="p-2 rounded-xl shimmer-gradient text-on-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:pointer-events-none active:scale-[0.97] shrink-0 self-end"
-                >
-                  {streaming ? (
-                    <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
-                  ) : (
-                    <span className="material-symbols-outlined text-sm">send</span>
-                  )}
-                </button>
-              </div>
-            </div>
+      {/* Floating PIP — same position as Home */}
+      <div
+        className="fixed z-50 w-64 rounded-2xl overflow-hidden glass-panel shadow-2xl select-none"
+        style={{ left: pip.pos.x, top: pip.pos.y }}
+        onMouseMove={(e) => pip.handleMove(e.clientX, e.clientY)}
+        onMouseUp={pip.stopDragging}
+        onMouseLeave={pip.stopDragging}
+        onTouchMove={(e) => { const t = e.touches[0]; pip.handleMove(t.clientX, t.clientY) }}
+        onTouchEnd={pip.stopDragging}
+      >
+        <div
+          className="flex items-center justify-between px-3 py-2 bg-surface-container/90 cursor-grab active:cursor-grabbing border-b border-white/5"
+          onMouseDown={pip.onMouseDown}
+          onTouchStart={pip.onTouchStart}
+        >
+          <div className="flex items-center gap-2">
+            <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse", avatarSpeaking ? "bg-primary" : isListening ? "bg-blue-400" : "bg-outline/40")} />
+            <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">AI Interviewer</span>
           </div>
+          <div className="flex items-end gap-0.5">
+            {(avatarSpeaking || isListening) && (avatarSpeaking ? [0, 120, 240, 360, 480] : [0, 150, 300]).map((delay) => (
+              <div key={delay} className={cn("w-0.5 rounded-full bar-wave", avatarSpeaking ? "bg-primary" : "bg-blue-400")} style={{ animationDelay: `${delay}ms`, height: "8px" }} />
+            ))}
+          </div>
+        </div>
+        <div className="relative bg-surface-container-low" style={{ aspectRatio: "4/3" }}>
+          <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-gradient-to-br from-surface-container to-surface-container-highest">
+            <span
+              className="material-symbols-outlined text-7xl pip-idle transition-all duration-500"
+              style={{
+                fontVariationSettings: avatarSpeaking ? "'FILL' 1" : "'FILL' 0",
+                color: avatarSpeaking
+                  ? "rgba(224,90,58,0.9)"
+                  : isListening
+                  ? "rgba(96,165,250,0.85)"
+                  : "rgba(155,156,158,0.3)",
+              }}
+            >
+              {avatarSpeaking ? "record_voice_over" : "face"}
+            </span>
+            <span
+              className="text-[10px] uppercase tracking-widest font-semibold transition-colors duration-300"
+              style={{
+                color: avatarSpeaking
+                  ? "rgba(224,90,58,0.7)"
+                  : isListening
+                  ? "rgba(96,165,250,0.6)"
+                  : audioEnabled
+                  ? "rgba(155,156,158,0.3)"
+                  : "rgba(155,156,158,0.25)",
+              }}
+            >
+              {avatarSpeaking ? "Speaking" : isListening ? "Listening" : audioEnabled ? "Ready" : "Audio off"}
+            </span>
+          </div>
+          {(avatarSpeaking || isListening) && (
+            <span className={cn("absolute inset-0 animate-ping opacity-10", avatarSpeaking ? "bg-primary" : "bg-blue-400")} />
+          )}
         </div>
       </div>
 
@@ -539,21 +487,10 @@ export default function SessionPage() {
               Before you finish — do you have any questions for the interviewer? Asking thoughtful questions about the team, role, or what they care about is part of the interview and will affect your score.
             </p>
             <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowClosingPrompt(false)
-                  inputRef.current?.focus()
-                }}
-                className="px-3 py-2 text-xs font-semibold rounded-lg border border-outline-variant/30 text-on-surface-variant hover:bg-surface-container-high transition-colors"
-              >
+              <button type="button" onClick={() => setShowClosingPrompt(false)} className="px-3 py-2 text-xs font-semibold rounded-lg border border-outline-variant/30 text-on-surface-variant hover:bg-surface-container-high transition-colors">
                 I have questions
               </button>
-              <button
-                type="button"
-                onClick={handleFinishConfirmed}
-                className="px-3 py-2 text-xs font-semibold rounded-lg shimmer-gradient text-on-primary hover:opacity-90 transition-opacity"
-              >
+              <button type="button" onClick={handleFinishConfirmed} className="px-3 py-2 text-xs font-semibold rounded-lg shimmer-gradient text-on-primary hover:opacity-90 transition-opacity">
                 I'm done — score me
               </button>
             </div>

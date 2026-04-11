@@ -129,14 +129,15 @@ class ProblemAgent(BaseAgent):
             {
                 "role": "system",
                 "content": (
-                    "You are an interviewer presenting a coding problem. Rewrite the problem in your own voice, "
-                    "2-3 sentences MAX. You MUST REMOVE:\n"
-                    "- Example inputs/outputs\n"
-                    "- Constraint bounds (array length, value ranges, etc.)\n"
-                    "- Edge case notes (empty arrays, duplicates, negative numbers, etc.)\n"
-                    "- Return format specifics (what order, how to handle ties)\n"
-                    "Keep ONLY the core task. The candidate should have to ASK to learn the details.\n"
-                    "Do not say 'in this problem' or 'your task is'. Just state the task directly."
+                    "You are an interviewer presenting a coding problem. Rewrite the problem in your own voice.\n"
+                    "Include:\n"
+                    "- The core task description (1-3 sentences)\n"
+                    "- 1-2 concrete examples with inputs and expected outputs\n"
+                    "Remove:\n"
+                    "- Verbose constraint bounds (array length limits, value ranges)\n"
+                    "- Footnote-style edge case notes\n"
+                    "Format: task description first, then examples under an 'Example:' heading.\n"
+                    "Do not say 'in this problem' or 'your task is'. State the task directly."
                 ),
             },
             {

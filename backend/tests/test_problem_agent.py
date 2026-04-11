@@ -124,7 +124,7 @@ async def test_problem_agent_run_url_source_raises_on_scraper_failure():
         await agent.run(ProblemInput(source="url", content="https://example.com/problem"))
 
 
-async def test_paraphrase_and_cut_prompt_requires_removing_examples_constraints():
+async def test_paraphrase_and_cut_prompt_keeps_examples_removes_constraints():
     llm = AsyncMock(spec=LLMService)
     llm.complete.return_value = "Cut problem statement"
     agent = ProblemAgent(llm=llm, scraper=AsyncMock(spec=ScraperService))
@@ -132,9 +132,8 @@ async def test_paraphrase_and_cut_prompt_requires_removing_examples_constraints(
     await agent._paraphrase_and_cut(_problem_dict())
 
     system_prompt = llm.complete.call_args.args[0][0]["content"]
-    assert "You MUST REMOVE" in system_prompt
-    assert "Example inputs/outputs" in system_prompt
-    assert "Constraint bounds" in system_prompt
+    assert "examples" in system_prompt.lower()
+    assert "constraint" in system_prompt.lower() or "remove" in system_prompt.lower()
 
 
 def _amazon_entries() -> list[QuestionEntry]:

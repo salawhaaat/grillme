@@ -109,3 +109,53 @@ Level 3 — Multi-Agent (Milestone 6)
 **Decision:** Store only canonical weakness tags (communication, problem solving, system design, time complexity, coding speed, debugging, leadership), normalize LLM tags into that taxonomy, and fall back to keyword-based extraction from scorecard text when LLM output is invalid/noisy.
 **Why:** Cross-session memory quality is more important than tag expressiveness. Canonical tags reduce drift/noise and produce stable profile recommendations.
 **Trade-off:** Less nuanced labels and some loss of specificity compared to free-form tags.
+
+## ADR-012 — Problem-first flow over prep-plan flow
+**Decision:** Every grillme user flow terminates at a coding problem statement that the user can start solving immediately. No prep plan is shown as a pre-interview blocker.
+**Why:** The product is a mock *interview*, not a *study guide*. A prep plan is friction — the user wants to code, ask clarifying questions, and get grilled. Feedback on what to study belongs in the post-interview scorecard, not before the session.
+**Trade-off:** Users lose the "here's what to review first" affordance. Scorecard's `areas_to_improve` + cross-session memory fill that role after the fact.
+
+## ADR-013 — ProblemAgent: paraphrase + cut real LeetCode problems
+**Decision:** For JD mode, ProblemAgent picks a real LeetCode problem matching the company's interview style, scrapes it, paraphrases it in the interviewer's voice, and **cuts** the examples / constraints / edge cases. The user only sees the core task; the interviewer has full knowledge and reveals details on request.
+**Why:** Real recruiters never hand out the full problem with examples. Candidates must ask clarifying questions to surface bounds, duplicates, edge cases, return format. This drives the `curiosity` scoring axis and matches how real interviews run.
+**Trade-off:** LLM has to pick a good problem per company (could be off-style). Alternative — generate original problems — was rejected because real LeetCode problems feel more authentic to candidates.
+
+## ADR-014 — Six-axis scorecard
+**Decision:** ScorerAgent evaluates candidates on six axes: `technical_correctness`, `process_of_thought`, `curiosity`, `self_presentation`, `closing_questions`, `code_quality`. Each axis scores 0-10 with a one-line comment. Overall score is a weighted average. Recommendation (hire / no_hire / strong_hire) stays.
+**Why:** A single overall score hides important soft-skill dimensions. Real interviewers evaluate on multiple axes. User feedback explicitly called out: process of thought, curiosity in the team/problem, closing questions, and how the candidate talks about themselves as things the scorer must grade.
+**Trade-off:** Larger scoring prompts (more tokens), more complex UI to render. Worth it for actionable, realistic feedback.
+
+## ADR-015 — Clarification is scored, not prompted
+**Decision:** The interviewer never says "Any questions before you start?" — it presents the cut problem and waits. If the candidate begins coding without asking clarifying questions, their `curiosity` axis is penalized by ScorerAgent.
+**Why:** Real interviewers don't hand-hold. Candidates who ask good clarifying questions up front are the strong ones. Explicit prompting would destroy the signal.
+**Trade-off:** New users may not realize they're supposed to ask and will get low `curiosity` scores. The scorecard feedback explains why, which teaches the behavior over repeated sessions.
+
+## ADR-016 — Unified input dropdown (JD / URL / Text)
+**Decision:** Home page has one dropdown with three sources: `jd` (paste job description), `url` (paste LeetCode URL), `text` (paste raw problem text). All three feed the same ProblemAgent pipeline and land on the same Session UI.
+**Why:** One mental model. Removes the "which tab am I on" confusion from the current JD/Problem tab toggle. Single backend code path via `POST /api/sessions/create`.
+**Trade-off:** Dropdowns are slightly more click-heavy than tabs. Mitigated by smart default (JD) and keyboard shortcut.
+
+## ADR-017 — Unified Session UI (coding-first for all modes)
+**Decision:** Session page always shows Monaco editor + terminal + chat side by side, regardless of input source. The `mode` field (`jd` / `problem`) becomes informational only — layout no longer branches on it.
+**Why:** Every session is a coding interview now (ADR-012, ADR-013). Splitting the UI by mode was confusing — JD mode had chat but no editor, problem mode had editor but no chat prominence. One layout, one experience.
+**Trade-off:** JD sessions that were previously chat-only now expose an editor the user may not fill in. Acceptable — the interviewer drives the candidate toward code via the generated problem.
+
+## ADR-018 — Kill the floating AI interviewer PIP
+**Decision:** Remove the draggable "AI Interviewer" picture-in-picture from the Home page. The real avatar lives inside the Session page layout and will be implemented properly in M11 (Talking Head).
+**Why:** The floating PIP was decorative and confusing — it became "part of the frame" when transitioning to Session, breaking the mental model. Better to have no fake avatar than a fake one that looks broken in two places.
+**Trade-off:** Home page loses a piece of visual flair. Replaced by a cleaner problem preview card.
+
+## ADR-019 — Curated question bank as primary problem source, LLM guess as fallback
+**Decision:** For JD mode, ProblemAgent picks problems from a curated `QuestionBank` built by scraping GitHub repos (swolecoder/Amazon-Online-Assessment-Questions-LeetCode, KushalVijay/AmazonCrackedResource, raleighlittles/Amazon-SDE-Interview-Assessments for Amazon; similar repos can be added per company). Selection is weighted by cross-source frequency (problems listed by more repos rank higher) and optionally biased by the user's cross-session weaknesses (ADR-011). LLM-guessed slug (existing M8 behavior) is a fallback only when the company is not in the bank.
+**Why:** LLM training data is stale and its "what company X asks" is unreliable. GitHub repos curated by candidates who actually interviewed are ground truth. Multi-source frequency filters noise — a problem listed by 3 repos is more likely to actually be asked than one listed by 1. This also mirrors the existing M6 pattern (Reddit/Glassdoor scraping via ResearchService) — just another data source in the ingestion layer.
+**Trade-off:** Seed data goes stale without manual refresh. Mitigated by `python -m app.cli.refresh_questions` CLI for scheduled/manual rebuilds. Biased toward companies with active GitHub coverage (Amazon > small startups). Startups and niche companies still fall through to LLM guess.
+
+## ADR-020 — Local inference via Ollama as a first-class LLM provider
+**Decision:** Add Ollama as a supported backend in `LLMService` alongside OpenAI / Groq / Gemini. Users can run grillme end-to-end with zero API cost by setting `LLM_PROVIDER=ollama` and `LLM_MODEL=llama3.1` (or any local model, e.g. `qwen2.5-coder:7b`).
+**Why:** Token efficiency matters — interview practice sessions rack up real API costs fast (10+ sessions/week × 50k+ tokens each). Ollama gives free, private, offline inference with acceptable quality for mock interviews. It also proves the provider-abstraction pattern from ADR-003 actually pays off (swap backends via env var, routes don't change). CV framing: "production-ready multi-provider LLM architecture with local-first fallback" reads well to hiring managers.
+**Trade-off:** Local models (llama3.1 8B, qwen2.5-coder 7B) are meaningfully worse than GPT-4o / Claude Opus for nuanced paraphrasing, 6-axis scoring calibration, and persona building. Acceptable degradation for practice runs; users who want a "final" polished session still use cloud providers. Ollama also requires the user to have Ollama installed + a model pulled (one-time setup cost).
+
+## ADR-021 — Docker-first deployment with docker-compose for local dev
+**Decision:** Ship grillme as multi-stage Docker images — backend on `python:3.13-slim`, frontend as a Node build step that produces static files served by nginx. A `docker-compose.yml` at the repo root composes backend + frontend + an optional Ollama sidecar for single-command local dev.
+**Why:** Deployment target is portable — runs unchanged on Fly.io, Railway, Render, self-hosted VPS, or a developer laptop. Multi-stage builds keep production images small (backend ~150MB, frontend ~50MB). Compose eliminates "works on my machine" friction and gives new contributors a one-command startup. A production-ready container setup is a strong CV signal for a personal project.
+**Trade-off:** Docker adds a build step, image registry considerations, and layer caching concerns. Worth it for portability and the production-ready positioning.
