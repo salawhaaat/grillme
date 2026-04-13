@@ -8,7 +8,7 @@ interface AvatarProps {
   statusLabel: string
   pos: { x: number; y: number }
   personaText?: string
-  provider?: "local" | "heygen"
+  provider?: "local" | "wav2lip"
   personaSeed?: string
   videoUrl?: string | null
   analyserRef: RefObject<AnalyserNode | null>

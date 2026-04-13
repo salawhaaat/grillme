@@ -333,7 +333,7 @@ export default function SessionPage() {
   async function playAssistantAudio(text?: string): Promise<boolean> {
     if (!audioEnabled) return true
     const speechText = text?.trim() ? text : undefined
-    if (speechText && avatarSession.enabled && avatarSession.provider === "heygen") {
+    if (speechText && avatarSession.enabled && avatarSession.provider !== "local") {
       const reqId = ++avatarVideoRequestRef.current
       setAvatarVideoUrl(null)
       api.getAvatarSpeakVideo(sessionId, speechText)
