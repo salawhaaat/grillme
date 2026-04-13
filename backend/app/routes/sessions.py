@@ -70,15 +70,20 @@ def _cv_context(cv_text: str | None) -> str:
     return cv_text[:3000]
 
 
-def _build_system_prompt(session: InterviewSession) -> str:
+def _build_system_prompt(session: InterviewSession, messages: list[dict] | None = None) -> str:
     difficulty_block = DIFFICULTY_INSTRUCTIONS.get(session.difficulty or "medium", DIFFICULTY_INSTRUCTIONS["medium"])
+    messages = messages if messages is not None else (json.loads(session.messages) if session.messages else [])
+    user_turn_count = sum(1 for m in messages if m.get("role") == "user")
 
     base = (
         f"{session.persona}\n\n"
         f"You are conducting a technical mock interview for {session.role} at "
         f"{session.company} ({session.level} level).\n\n"
         "Rules: ask ONE question at a time, follow up on incomplete answers, "
-        "stay in character throughout.\n\n"
+        "stay in character throughout.\n"
+        "Never provide a full final solution or complete production-ready code, even if asked directly. "
+        "If asked for the solution, refuse briefly, then provide one hint and one guiding question.\n"
+        "Keep each reply short (1-3 sentences) unless the candidate explicitly asks for deep detail.\n\n"
         f"{difficulty_block}\n\n"
     )
     if session.cv_text:
@@ -97,7 +102,57 @@ def _build_system_prompt(session: InterviewSession) -> str:
             "- React to their code and test results when they share them.\n"
             "- Near the end (after they solve or give up), wrap with 'That's all from me — do you have any questions for me?'\n"
         )
-    messages = json.loads(session.messages) if session.messages else []
+
+    qb_data = json.loads(session.question_bank) if session.question_bank else None
+    warmup_questions = qb_data.get("warmup", []) if qb_data else []
+    trivia_questions = qb_data.get("trivia", []) if qb_data else []
+    culture_questions = qb_data.get("culture_fit", []) if qb_data else []
+    non_coding_total = (
+        len(warmup_questions)
+        + len(trivia_questions)
+        + len(culture_questions)
+    )
+
+    if user_turn_count == 0:
+        phase_instruction = (
+            "This is the START of the interview. Introduce yourself briefly with clear character. "
+            "Ask ONE warmup question tied to the candidate background/CV if available. "
+            "Do NOT present the coding problem yet."
+        )
+    elif qb_data and user_turn_count < len(warmup_questions):
+        target = warmup_questions[user_turn_count]
+        phase_instruction = (
+            "You are in the warmup phase. Ask exactly the next warmup question from the question bank, "
+            f"verbatim or with minimal wording change: {target!r}. "
+            "If CV context exists, anchor the question to one specific CV fact."
+        )
+    elif qb_data and user_turn_count < (len(warmup_questions) + len(trivia_questions)):
+        trivia_idx = user_turn_count - len(warmup_questions)
+        target = trivia_questions[trivia_idx]
+        phase_instruction = (
+            "You are in technical trivia phase. Ask exactly the next trivia question from the question bank: "
+            f"{target!r}. Keep it concise and ask only one question."
+        )
+    elif qb_data and user_turn_count < non_coding_total:
+        culture_idx = user_turn_count - len(warmup_questions) - len(trivia_questions)
+        target = culture_questions[culture_idx]
+        phase_instruction = (
+            "You are in culture-fit phase. Ask exactly the next culture-fit question from the question bank: "
+            f"{target!r}. Keep it concise and ask only one question."
+        )
+    elif qb_data and user_turn_count == non_coding_total:
+        phase_instruction = (
+            "Transition into coding now. Briefly present the coding problem once in your own words, "
+            "then ask the candidate for their initial approach. Do not dump all hidden details."
+        )
+    else:
+        phase_instruction = (
+            f"You are in the coding phase. React to the candidate's approach, ask for "
+            f"clarifications on their solution, probe edge cases, and give hints if they are stuck "
+            f"(difficulty: {session.difficulty}). Do not repeat the problem statement verbatim."
+        )
+    base += f"\n\n[INTERVIEW PHASE]\n{phase_instruction}\n"
+
     latest_code_block = None
     for m in reversed(messages):
         if m.get("content", "").startswith("[CODE UPDATE]"):
@@ -105,10 +160,10 @@ def _build_system_prompt(session: InterviewSession) -> str:
             break
     if latest_code_block:
         base += f"\n\nLATEST CODE FROM CANDIDATE:\n{latest_code_block}\n"
-    if not session.question_bank:
+    if not qb_data:
         return base
 
-    qb = json.loads(session.question_bank)
+    qb = qb_data
     coding = qb.get("coding", {})
     coding_line = (
         f"  Coding round ({coding.get('type', 'leetcode')}): {coding.get('topic', '')}"
@@ -120,7 +175,9 @@ def _build_system_prompt(session: InterviewSession) -> str:
         f"3. Culture fit (2 questions): {' | '.join(qb.get('culture_fit', []))}\n"
         f"4. {coding_line}\n\n"
         "5. Closing: ask the candidate 'Do you have any questions for me?' and discuss their questions.\n\n"
-        "Progress through sections naturally. Do not skip sections. "
+        "Progress through sections naturally. Do not skip sections. Use these questions in order. "
+        "Use CV context explicitly in warmup whenever available. "
+        "After the opening problem presentation, do not restate the problem unless the candidate asks. "
         "In the closing part, encourage strong candidate-style questions that show curiosity about "
         "the team, the problems they are solving, and what matters most in the role."
     )
@@ -170,6 +227,7 @@ class CreateSessionRequest(BaseModel):
     source: Literal["jd", "url", "text"]
     content: str
     difficulty: Literal["rare", "medium", "well_done"] = "medium"
+    cv_text: str | None = None
 
     @field_validator("content")
     @classmethod
@@ -177,6 +235,18 @@ class CreateSessionRequest(BaseModel):
         if not v.strip():
             raise ValueError("content must not be empty")
         return v
+
+    @field_validator("cv_text")
+    @classmethod
+    def create_cv_size_guard(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        trimmed = v.strip()
+        if not trimmed:
+            return None
+        if len(trimmed) > 20000:
+            raise ValueError("cv_text is too long")
+        return trimmed
 
 
 class MessageRequest(BaseModel):
@@ -271,7 +341,7 @@ async def create_from_jd(
 
     try:
         result = await orchestrator.run_jd_pipeline(
-            body.jd, user_weaknesses=user_weaknesses
+            body.jd, user_weaknesses=user_weaknesses, cv_text=body.cv_text
         )
         parsed = result.parsed_jd.model_dump()
         persona = result.persona.persona_text
@@ -297,8 +367,9 @@ async def create_from_jd(
                 f"You are interviewing a candidate for {parsed.get('role')} at {parsed.get('company')} "
                 f"({parsed.get('level')} level). "
                 f"{'Candidate CV context:\\n' + _cv_context(body.cv_text) + '\\n\\n' if body.cv_text else ''}"
-                "Give a one-sentence introduction as yourself, then ask your first warmup question. "
-                "Be direct. No preamble, no agenda, no prep tips."
+                f"Question bank warmup starts with: {question_bank.get('warmup', [])[:2]}. "
+                "Give a one-sentence in-character introduction as yourself, then ask ONE warmup question "
+                "grounded in the candidate's CV/background. Do NOT present the coding problem yet."
             ),
         },
         {"role": "user", "content": "Begin."},
@@ -365,19 +436,32 @@ async def create_session(
     persona = result.persona
     parsed = result.parsed_jd
 
+    question_bank_payload = None
+    if body.source == "jd":
+        try:
+            jd_pipeline = await orchestrator.run_jd_pipeline(
+                body.content,
+                user_weaknesses=user_weaknesses,
+                cv_text=body.cv_text,
+            )
+            question_bank_payload = jd_pipeline.persona.question_bank.model_dump()
+        except Exception as e:
+            logger.warning("Question bank generation fallback failed: %s", e)
+
     opening_messages = [
         {
             "role": "system",
             "content": (
                 f"{persona.persona_text}\n\n"
-                "You are about to present a coding problem. State the problem in 2-3 sentences, "
-                "then WAIT. Do NOT ask 'any questions?' — do NOT hint that clarifying questions are expected. "
-                "Simply present the cut problem and stop."
+                f"{'Candidate CV context:\\n' + _cv_context(body.cv_text) + '\\n\\n' if body.cv_text else ''}"
+                f"{'Question bank warmup starts with: ' + str(question_bank_payload.get('warmup', [])[:2]) + '. ' if question_bank_payload else ''}"
+                "Start with character: one-sentence introduction as interviewer, then ask ONE warmup question. "
+                "If candidate CV/background is known, use that context. Do NOT present the coding problem yet."
             ),
         },
         {
             "role": "user",
-            "content": f"Present this problem:\n{problem.problem_statement}",
+            "content": "Begin.",
         },
     ]
     opening = await llm.complete(opening_messages)
@@ -392,6 +476,8 @@ async def create_session(
         level=parsed.level if parsed else None,
         persona=persona.persona_text,
         oa_platform=persona.oa_platform,
+        cv_text=body.cv_text,
+        question_bank=json.dumps(question_bank_payload) if question_bank_payload else None,
         problem_statement=problem.problem_statement,
         full_problem=problem.full_problem,
         starter_code=problem.starter_code,
@@ -524,7 +610,7 @@ async def send_message(
     messages = json.loads(session.messages)
     messages.append({"role": "user", "content": body.content})
 
-    system_prompt = _build_system_prompt(session)
+    system_prompt = _build_system_prompt(session, messages=messages)
     llm_messages = [{"role": "system", "content": system_prompt}] + messages
 
     async def generate():
@@ -591,10 +677,9 @@ async def create_from_problem(
             "role": "system",
             "content": (
                 f"{persona}\n\n"
-                f"You are starting a coding interview. Present this problem clearly, "
-                f"then ask the candidate to walk you through their initial approach "
-                f"before writing any code.\n\n"
-                f"Problem: {problem['title']}\n\n{problem['description']}"
+                "Start in character with a brief self-introduction, then ask ONE warmup question "
+                "about the candidate's past project or approach to problem-solving. "
+                "Do NOT present the coding problem yet."
             ),
         },
         {"role": "user", "content": "Begin."},

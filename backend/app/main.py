@@ -7,6 +7,7 @@ from app.routes.chat import router as chat_router
 from app.routes.code import router as code_router
 from app.routes.sessions import router as sessions_router
 from app.routes.voice import router as voice_router
+from app.routes.avatar import router as avatar_router
 
 
 @asynccontextmanager
@@ -29,6 +30,7 @@ app.include_router(chat_router)
 app.include_router(code_router)
 app.include_router(sessions_router)
 app.include_router(voice_router)
+app.include_router(avatar_router)
 
 
 @app.get("/api/health")

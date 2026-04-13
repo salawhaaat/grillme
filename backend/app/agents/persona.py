@@ -16,6 +16,25 @@ class PersonaAgent(BaseAgent):
     name = "persona"
     description = "Builds interviewer persona, question bank, and prep plan"
 
+    def _normalize_question_bank(self, qb: QuestionBank) -> QuestionBank:
+        warmup = [q.strip() for q in qb.warmup if q.strip()]
+        trivia = [q.strip() for q in qb.trivia if q.strip()]
+        culture = [q.strip() for q in qb.culture_fit if q.strip()]
+
+        while len(warmup) < 2:
+            warmup.append("Tell me about a project you're proud of and why.")
+        while len(trivia) < 4:
+            trivia.append("Walk me through a technical decision you made and the tradeoffs.")
+        while len(culture) < 2:
+            culture.append("What kind of team environment helps you do your best work?")
+
+        return QuestionBank(
+            warmup=warmup[:2],
+            trivia=trivia[:4],
+            culture_fit=culture[:2],
+            coding=qb.coding,
+        )
+
     async def _build_persona(self, input_data: PersonaInput) -> str:
         parsed = input_data.parsed_jd
         skills = ", ".join(parsed.key_skills)
@@ -32,8 +51,8 @@ class PersonaAgent(BaseAgent):
                 "role": "system",
                 "content": (
                     "You are an expert at designing realistic mock interview personas. "
-                    "Create a specific, named interviewer character. "
-                    "Describe their background, interview style, and what they look for."
+                    "Create a specific, named interviewer character with soul and clear voice. "
+                    "Describe their background, interview style, signature tone, and what they look for."
                 ),
             },
             {
@@ -54,6 +73,13 @@ class PersonaAgent(BaseAgent):
         parsed = input_data.parsed_jd
         skills = ", ".join(parsed.key_skills)
         focus = ", ".join(parsed.focus_areas)
+        cv_context = (input_data.cv_text or "").strip()[:1200]
+        cv_line = (
+            "\nCandidate CV/context:\n"
+            f"{cv_context}\n"
+            if cv_context
+            else "\nCandidate CV/context: not provided.\n"
+        )
         messages = [
             {
                 "role": "system",
@@ -65,6 +91,9 @@ class PersonaAgent(BaseAgent):
                     "- General SWE / Backend / Frontend → leetcode\n"
                     "- Data Science / ML / AI → leetcode (stats/ML focus)\n"
                     "- Junior / Intern level → simpler questions, lighter coding round\n\n"
+                    "These questions will be used in order during the interview. Warmup first, "
+                    "then trivia, then coding.\n"
+                    "If CV/context exists, warmup question #1 MUST reference one concrete CV detail.\n\n"
                     "Return JSON with exactly these keys:\n"
                     "warmup (list[str], 2 questions),\n"
                     "trivia (list[str], 4 role-specific technical questions),\n"
@@ -80,11 +109,12 @@ class PersonaAgent(BaseAgent):
                     f"Level: {parsed.level}\n"
                     f"Key skills: {skills}\n"
                     f"Focus areas: {focus}"
+                    f"{cv_line}"
                 ),
             },
         ]
         raw = await self.llm.complete(messages, json_mode=True)
-        return QuestionBank.model_validate(json.loads(raw))
+        return self._normalize_question_bank(QuestionBank.model_validate(json.loads(raw)))
 
     async def _generate_prep_plan(self, input_data: PersonaInput) -> str:
         parsed = input_data.parsed_jd
@@ -147,7 +177,7 @@ class PersonaAgent(BaseAgent):
                 "role": "system",
                 "content": (
                     "You are designing a realistic interviewer character for a coding interview. "
-                    "Give them a name and 2-3 sentences of personality + style. "
+                    "Give them a name and 2-3 sentences of personality + style with a vivid but professional voice. "
                     "They must NOT reveal the problem's hidden details unless asked."
                 ),
             },

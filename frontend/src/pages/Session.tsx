@@ -1,16 +1,43 @@
 import { useEffect, useRef, useState } from "react"
-import { useLocation, useNavigate, useParams } from "react-router-dom"
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom"
 import Editor from "@monaco-editor/react"
 import {
   api,
   streamMessage,
+  type AvatarSessionInfo,
   type RunResult,
   type Session,
   type TestResult,
 } from "@/lib/api/client"
 import { cn } from "@/lib/utils"
 import { Sidebar } from "@/components/Sidebar"
+import { Avatar } from "@/components/Avatar"
 import { useSpeechRecognition } from "@/lib/hooks/useSpeechRecognition"
+
+type DialogueTurn = {
+  id: string
+  role: "assistant" | "user"
+  text: string
+}
+
+function inferVoiceFromPersona(personaText?: string | null): "en-US-GuyNeural" | "en-US-JennyNeural" | "en-US-AriaNeural" {
+  const raw = (personaText ?? "").toLowerCase()
+  if (!raw) return "en-US-JennyNeural"
+  const femaleSignals = [
+    " she ",
+    " her ",
+    "herself",
+    " rachel",
+    " emma",
+    " sophia",
+    " olivia",
+    " jenny",
+    " aria",
+  ]
+  const normalized = ` ${raw.replace(/[^\w\s]/g, " ")} `
+  if (femaleSignals.some((sig) => normalized.includes(sig))) return "en-US-JennyNeural"
+  return "en-US-GuyNeural"
+}
 
 function useTimer(initialSeconds = 45 * 60) {
   const [seconds, setSeconds] = useState(initialSeconds)
@@ -49,7 +76,36 @@ function useDraggable(initialPos: { x: number; y: number }) {
 
   const stopDragging = () => { dragging.current = false }
 
-  return { pos, onMouseDown, onTouchStart, handleMove, stopDragging }
+  useEffect(() => {
+    const onWindowMouseMove = (e: MouseEvent) => {
+      handleMove(e.clientX, e.clientY)
+    }
+    const onWindowMouseUp = () => {
+      stopDragging()
+    }
+    const onWindowTouchMove = (e: TouchEvent) => {
+      const touch = e.touches[0]
+      if (!touch) return
+      handleMove(touch.clientX, touch.clientY)
+    }
+    const onWindowTouchEnd = () => {
+      stopDragging()
+    }
+
+    window.addEventListener("mousemove", onWindowMouseMove)
+    window.addEventListener("mouseup", onWindowMouseUp)
+    window.addEventListener("touchmove", onWindowTouchMove, { passive: true })
+    window.addEventListener("touchend", onWindowTouchEnd)
+
+    return () => {
+      window.removeEventListener("mousemove", onWindowMouseMove)
+      window.removeEventListener("mouseup", onWindowMouseUp)
+      window.removeEventListener("touchmove", onWindowTouchMove)
+      window.removeEventListener("touchend", onWindowTouchEnd)
+    }
+  }, [])
+
+  return { pos, onMouseDown, onTouchStart, stopDragging }
 }
 
 export default function SessionPage() {
@@ -72,11 +128,22 @@ export default function SessionPage() {
   const [terminalTab, setTerminalTab] = useState<"console" | "tests">("console")
   const [running, setRunning] = useState(false)
   const [showClosingPrompt, setShowClosingPrompt] = useState(false)
-  const [audioEnabled, setAudioEnabled] = useState(false)
+  const [audioEnabled, setAudioEnabled] = useState(true)
   const [avatarSpeaking, setAvatarSpeaking] = useState(false)
   const [voiceName, setVoiceName] = useState<
     "en-US-GuyNeural" | "en-US-JennyNeural" | "en-US-AriaNeural"
   >("en-US-GuyNeural")
+  const [dialogue, setDialogue] = useState<DialogueTurn[]>([])
+  const [latestReply, setLatestReply] = useState("")
+  const [voiceNeedsUnlock, setVoiceNeedsUnlock] = useState(false)
+  const [turnState, setTurnState] = useState<"idle" | "listening" | "thinking" | "speaking">("idle")
+  const [leftPaneWidth, setLeftPaneWidth] = useState(40)
+  const [avatarSession, setAvatarSession] = useState<AvatarSessionInfo>({
+    enabled: false,
+    provider: "local",
+    persona_seed: "default",
+  })
+  const [avatarVideoUrl, setAvatarVideoUrl] = useState<string | null>(null)
 
   const {
     transcript,
@@ -87,14 +154,48 @@ export default function SessionPage() {
   } = useSpeechRecognition()
 
   const activeAudioRef = useRef<HTMLAudioElement | null>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const playbackRef = useRef<{
+    url: string
+    source: MediaElementAudioSourceNode
+    analyser: AnalyserNode
+  } | null>(null)
+  const pendingSpeechRef = useRef<string | null>(null)
   const pendingTranscriptRef = useRef("")
+  const lastSentTranscriptRef = useRef("")
   const hasPlayedOpeningRef = useRef(false)
+  const dialogueRef = useRef<HTMLDivElement | null>(null)
+  const editorLayoutRef = useRef<HTMLDivElement | null>(null)
+  const resizingPanelsRef = useRef(false)
+  const avatarVideoRequestRef = useRef(0)
+  const explicitVoicePreferenceRef = useRef(false)
 
-  // Load session
+  function buildDialogue(messages: Session["messages"]): DialogueTurn[] {
+    return messages
+      .filter((m) => m.role === "assistant" || m.role === "user")
+      .map((m, idx) => ({
+        id: `${m.role}-${idx}`,
+        role: m.role as "assistant" | "user",
+        text: m.content,
+      }))
+  }
+
   useEffect(() => {
-    api.getSession(sessionId).then((s) => {
+    Promise.all([
+      api.getSession(sessionId),
+      api.getAvatarSession(sessionId).catch(() => ({
+        enabled: false,
+        provider: "local" as const,
+        persona_seed: "default",
+      })),
+    ]).then(([s, avatar]) => {
       setSession(s)
-      const navState = location.state as { openingMessage?: string; starterCode?: string; problemStatement?: string } | null
+      setAvatarSession(avatar)
+      if (!explicitVoicePreferenceRef.current) {
+        setVoiceName(inferVoiceFromPersona(s.persona))
+      }
+      const navState = location.state as { starterCode?: string; problemStatement?: string } | null
       const starterFromNav = navState?.starterCode
       const problemFromNav = navState?.problemStatement
       if (s.problem_statement) {
@@ -107,76 +208,182 @@ export default function SessionPage() {
       } else if (starterFromNav) {
         setCode(starterFromNav)
       }
+
+      const turns = buildDialogue(s.messages)
+      setDialogue(turns)
     })
   }, [sessionId, location.state])
 
-  // Load settings
   useEffect(() => {
     try {
       const raw = localStorage.getItem("grillme_settings")
-      if (!raw) return
+      if (!raw) {
+        setAudioEnabled(true)
+        return
+      }
       const parsed = JSON.parse(raw) as {
         voiceOutputEnabled?: boolean
         voiceName?: "en-US-GuyNeural" | "en-US-JennyNeural" | "en-US-AriaNeural"
       }
-      setAudioEnabled(Boolean(parsed.voiceOutputEnabled))
-      if (parsed.voiceName) setVoiceName(parsed.voiceName)
+      setAudioEnabled(parsed.voiceOutputEnabled ?? true)
+      if (parsed.voiceName) {
+        explicitVoicePreferenceRef.current = true
+        setVoiceName(parsed.voiceName)
+      }
     } catch { /* ignore */ }
   }, [])
 
-  // Auto-play opening message once when session + audio are ready
+  useEffect(() => {
+    if (avatarSpeaking) {
+      setTurnState("speaking")
+      return
+    }
+    if (streaming) {
+      setTurnState("thinking")
+      return
+    }
+    if (isListening) {
+      setTurnState("listening")
+      return
+    }
+    setTurnState("idle")
+  }, [avatarSpeaking, streaming, isListening])
+
+  useEffect(() => {
+    const el = dialogueRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [dialogue, latestReply])
+
   useEffect(() => {
     if (!audioEnabled || !session || hasPlayedOpeningRef.current) return
     hasPlayedOpeningRef.current = true
     void playAssistantAudio()
-  }, [session, audioEnabled]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [audioEnabled, session]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Pause mic while avatar speaks/streaming; restart after each phrase (continuous: false)
   useEffect(() => {
     if (!isSpeechSupported) return
-    if (avatarSpeaking || streaming) {
+    if (avatarSpeaking || streaming || (audioEnabled && voiceNeedsUnlock)) {
       stopListening()
-    } else {
-      startListening()
-    }
-  }, [avatarSpeaking, streaming, isSpeechSupported]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Auto-send when mic captures speech and goes silent
-  useEffect(() => {
-    if (isListening) {
-      pendingTranscriptRef.current = transcript
       return
     }
+    if (!isListening) startListening()
+  }, [avatarSpeaking, streaming, voiceNeedsUnlock, audioEnabled, isSpeechSupported, isListening]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!isListening || !transcript.trim()) return
+    pendingTranscriptRef.current = transcript
+  }, [isListening, transcript])
+
+  useEffect(() => {
+    if (isListening || streaming) return
     const text = pendingTranscriptRef.current.trim()
-    if (!text || streaming || avatarSpeaking) return
+    if (!text || avatarSpeaking) return
+    if (text === lastSentTranscriptRef.current) return
+    lastSentTranscriptRef.current = text
     pendingTranscriptRef.current = ""
     void handleSend(text)
-  }, [isListening]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isListening, avatarSpeaking, streaming]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Cleanup audio on unmount
+  function cleanupActiveAudio() {
+    if (activeAudioRef.current) {
+      activeAudioRef.current.onended = null
+      activeAudioRef.current.onerror = null
+      activeAudioRef.current.pause()
+      activeAudioRef.current = null
+    }
+    if (playbackRef.current) {
+      URL.revokeObjectURL(playbackRef.current.url)
+      playbackRef.current.source.disconnect()
+      playbackRef.current.analyser.disconnect()
+      playbackRef.current = null
+    }
+    analyserRef.current = null
+    setAvatarSpeaking(false)
+  }
+
   useEffect(() => {
     return () => {
-      if (activeAudioRef.current) {
-        activeAudioRef.current.pause()
-        activeAudioRef.current = null
+      cleanupActiveAudio()
+      if (audioContextRef.current) {
+        void audioContextRef.current.close()
       }
     }
   }, [])
 
-  async function playAssistantAudio() {
-    if (!audioEnabled) return
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!resizingPanelsRef.current || !editorLayoutRef.current) return
+      const rect = editorLayoutRef.current.getBoundingClientRect()
+      if (rect.width <= 0) return
+      const next = ((e.clientX - rect.left) / rect.width) * 100
+      setLeftPaneWidth(Math.max(30, Math.min(55, next)))
+    }
+    const onMouseUp = () => {
+      resizingPanelsRef.current = false
+    }
+    window.addEventListener("mousemove", onMouseMove)
+    window.addEventListener("mouseup", onMouseUp)
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove)
+      window.removeEventListener("mouseup", onMouseUp)
+    }
+  }, [])
+
+  async function playAssistantAudio(text?: string): Promise<boolean> {
+    if (!audioEnabled) return true
+    const speechText = text?.trim() ? text : undefined
+    if (speechText && avatarSession.enabled && avatarSession.provider === "heygen") {
+      const reqId = ++avatarVideoRequestRef.current
+      setAvatarVideoUrl(null)
+      api.getAvatarSpeakVideo(sessionId, speechText)
+        .then((video) => {
+          if (reqId !== avatarVideoRequestRef.current) return
+          if (!video.enabled || !video.video_url) return
+          setAvatarVideoUrl(video.video_url)
+        })
+        .catch(() => {})
+    }
     try {
-      const blob = await api.speakSession(sessionId, voiceName)
-      if (activeAudioRef.current) activeAudioRef.current.pause()
+      const blob = speechText
+        ? await api.speakText(speechText, voiceName)
+        : await api.speakSession(sessionId, voiceName)
+      cleanupActiveAudio()
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
       activeAudioRef.current = audio
+
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContext()
+      }
+      if (audioContextRef.current.state === "suspended") {
+        await audioContextRef.current.resume()
+      }
+      const source = audioContextRef.current.createMediaElementSource(audio)
+      const analyser = audioContextRef.current.createAnalyser()
+      analyser.fftSize = 256
+      source.connect(analyser)
+      analyser.connect(audioContextRef.current.destination)
+      analyserRef.current = analyser
+      playbackRef.current = { url, source, analyser }
       setAvatarSpeaking(true)
-      audio.onended = () => { URL.revokeObjectURL(url); setAvatarSpeaking(false) }
-      audio.onerror = () => { URL.revokeObjectURL(url); setAvatarSpeaking(false) }
+
+      audio.onended = () => {
+        cleanupActiveAudio()
+      }
+      audio.onerror = () => {
+        cleanupActiveAudio()
+      }
+
       await audio.play()
+      pendingSpeechRef.current = null
+      setVoiceNeedsUnlock(false)
+      return true
     } catch {
       setAvatarSpeaking(false)
+      pendingSpeechRef.current = speechText ?? "__session_opening__"
+      setVoiceNeedsUnlock(true)
+      return false
     }
   }
 
@@ -221,15 +428,40 @@ export default function SessionPage() {
     if (!text || streaming) return
     setStreaming(true)
     setError(null)
+    setLatestReply("Thinking…")
+    setDialogue((prev) => [
+      ...prev,
+      { id: `user-${Date.now()}`, role: "user", text },
+    ])
     try {
-      // consume stream but don't display chat
-      for await (const _ of streamMessage(sessionId, text)) { /* voice only */ }
-      await playAssistantAudio()
+      let accumulatedText = ""
+      for await (const chunk of streamMessage(sessionId, text)) {
+        accumulatedText += chunk
+        setLatestReply(accumulatedText)
+      }
+      setLatestReply(accumulatedText)
+      setDialogue((prev) => [
+        ...prev,
+        { id: `assistant-${Date.now()}`, role: "assistant", text: accumulatedText },
+      ])
+      setLatestReply("")
+      await playAssistantAudio(accumulatedText)
     } catch (e) {
+      setLatestReply("")
       setError(e instanceof Error ? e.message : "Stream error")
     } finally {
       setStreaming(false)
     }
+  }
+
+  function handleEnableVoicePlayback() {
+    const pending = pendingSpeechRef.current
+    if (!pending) return
+    if (pending === "__session_opening__") {
+      void playAssistantAudio()
+      return
+    }
+    void playAssistantAudio(pending)
   }
 
   function handleFinishClick() {
@@ -248,16 +480,27 @@ export default function SessionPage() {
     }
   }
 
+  const streamingReply = latestReply === "Thinking…" ? "" : latestReply
+  const statusLabel = turnState === "speaking"
+    ? "Speaking"
+    : turnState === "thinking"
+      ? "Thinking"
+      : turnState === "listening"
+        ? "Listening"
+        : audioEnabled
+          ? "Ready"
+          : "Audio off"
+
   return (
     <div className="h-screen overflow-hidden flex flex-col bg-background">
       <header className="flex justify-between items-center w-full px-6 py-3 border-b border-border bg-background shrink-0 z-50">
-        <div className="flex items-center gap-2">
+        <Link to="/" className="flex items-center gap-2 hover:opacity-90 transition-opacity">
           <img src="/logo.jpg" alt="grillme" className="h-9 w-9 rounded-full" />
           <span className="text-xl font-black tracking-tighter uppercase font-wordmark">
             <span className="text-on-surface">grill</span>
             <span className="text-primary">me</span>
           </span>
-        </div>
+        </Link>
         <div className="flex items-center gap-4 ml-auto">
           <div className="flex items-center gap-2 bg-surface-container-low px-3 py-1.5 rounded-xl border border-outline-variant/20">
             <span className="material-symbols-outlined text-tertiary text-lg" style={{ fontVariationSettings: "'FILL' 1" }}>timer</span>
@@ -267,10 +510,10 @@ export default function SessionPage() {
             type="button"
             onClick={() => {
               if (audioEnabled && activeAudioRef.current) {
-                activeAudioRef.current.pause()
-                activeAudioRef.current = null
-                setAvatarSpeaking(false)
+                cleanupActiveAudio()
               }
+              setVoiceNeedsUnlock(false)
+              pendingSpeechRef.current = null
               setAudioEnabled((prev) => {
                 const next = !prev
                 try {
@@ -294,33 +537,68 @@ export default function SessionPage() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar activePage="home" />
 
-        <div className="flex flex-1 overflow-hidden">
-          {/* LEFT — collapsible problem statement */}
-          <div className="w-2/5 border-r border-border bg-surface-container-low flex flex-col overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-2 bg-surface-container-low border-b border-border shrink-0">
-              <button
-                onClick={() => setProblemCollapsed((c) => !c)}
-                className="flex items-center gap-2"
-              >
-                <span className="material-symbols-outlined text-primary text-base" style={{ fontVariationSettings: "'FILL' 1" }}>
-                  {problemCollapsed ? "chevron_right" : "expand_more"}
-                </span>
-                <span className="text-xs font-bold text-on-surface uppercase tracking-widest">Coding Problem</span>
-              </button>
-              {session?.difficulty && (
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-primary/10 text-primary border border-primary/30">
-                  {session.difficulty}
-                </span>
+        <div ref={editorLayoutRef} className="flex flex-1 overflow-hidden">
+          <div style={{ width: `${leftPaneWidth}%` }} className="border-r border-border bg-surface-container-low flex flex-col overflow-hidden">
+            <div className="border-b border-border bg-surface-container-low shrink-0">
+              <div className="px-4 py-2 flex items-center justify-between">
+                <button
+                  onClick={() => setProblemCollapsed((c) => !c)}
+                  className="flex items-center gap-2 text-left"
+                >
+                  <span className="material-symbols-outlined text-primary text-base" style={{ fontVariationSettings: "'FILL' 1" }}>
+                    {problemCollapsed ? "chevron_right" : "expand_more"}
+                  </span>
+                  <span className="text-xs font-bold text-on-surface uppercase tracking-widest">Coding Problem</span>
+                </button>
+                {session?.difficulty && (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-primary/10 text-primary border border-primary/30">
+                    {session.difficulty}
+                  </span>
+                )}
+              </div>
+              {!problemCollapsed && (
+                <div className="px-4 pb-3 max-h-52 overflow-y-auto no-scrollbar">
+                  <p className="text-xs text-on-surface whitespace-pre-wrap leading-relaxed">
+                    {problemStatement || (location.state as { problemStatement?: string } | null)?.problemStatement || "Loading problem..."}
+                  </p>
+                </div>
               )}
             </div>
 
-            {!problemCollapsed && (
-              <div className="flex-1 overflow-y-auto no-scrollbar p-4">
-                <p className="text-sm text-on-surface whitespace-pre-wrap leading-relaxed">
-                  {problemStatement || (location.state as { problemStatement?: string } | null)?.problemStatement || "Loading problem..."}
-                </p>
-              </div>
-            )}
+            <div className="px-4 py-2 border-b border-border shrink-0">
+              <span className="text-[11px] font-bold text-on-surface uppercase tracking-widest">Interview Dialogue</span>
+            </div>
+
+            <div ref={dialogueRef} className="flex-1 overflow-y-auto no-scrollbar p-3 space-y-2">
+              {dialogue.length === 0 && !streamingReply ? (
+                <p className="text-xs italic text-on-surface-variant/60">Interview conversation will appear here.</p>
+              ) : (
+                <>
+                  {dialogue.map((turn) => (
+                    <div
+                      key={turn.id}
+                      className={cn(
+                        "max-w-[92%] rounded-lg px-2.5 py-2 text-xs leading-relaxed whitespace-pre-wrap",
+                        turn.role === "assistant"
+                          ? "mr-auto bg-surface-container text-on-surface border border-outline-variant/20"
+                          : "ml-auto bg-primary/10 border border-primary/30 text-on-surface",
+                      )}
+                    >
+                      <span className={cn("mb-1 block text-[10px] font-bold uppercase tracking-widest", turn.role === "assistant" ? "text-primary/80" : "text-blue-300/90")}>
+                        {turn.role === "assistant" ? "Interviewer" : "You"}
+                      </span>
+                      {turn.text}
+                    </div>
+                  ))}
+                  {(streaming || streamingReply) && (
+                    <div className="max-w-[92%] mr-auto rounded-lg px-2.5 py-2 text-xs leading-relaxed whitespace-pre-wrap bg-surface-container text-on-surface border border-outline-variant/20">
+                      <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-primary/80">Interviewer</span>
+                      {latestReply}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
 
             {error && (
               <div className="mx-4 mb-3 flex items-center gap-2 text-error text-xs px-3 py-2 bg-error-container/10 rounded-xl border border-error/20 shrink-0">
@@ -329,8 +607,7 @@ export default function SessionPage() {
               </div>
             )}
 
-            {/* Live transcript */}
-            <div className="px-4 py-3 border-t border-border shrink-0 min-h-[52px] flex items-center">
+            <div className="px-4 py-3 border-t border-border shrink-0 min-h-[52px] flex items-center justify-between gap-3">
               {isListening && transcript ? (
                 <p className="text-xs text-blue-300 italic leading-relaxed line-clamp-2">"{transcript}"</p>
               ) : isListening ? (
@@ -345,10 +622,28 @@ export default function SessionPage() {
               ) : (
                 <span className="text-xs text-outline/30">Speak to respond</span>
               )}
+              <div className="flex items-center gap-2 shrink-0">
+                {voiceNeedsUnlock && audioEnabled && (
+                  <button
+                    type="button"
+                    onClick={handleEnableVoicePlayback}
+                    className="px-2 py-1 text-[10px] font-semibold rounded-md border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20"
+                  >
+                    Enable voice
+                  </button>
+                )}
+                <span className="text-[10px] uppercase tracking-widest text-on-surface-variant/70">
+                  {turnState}
+                </span>
+              </div>
             </div>
           </div>
 
-          {/* RIGHT — Monaco editor + console + Finish button */}
+          <div
+            className="w-1.5 bg-border/70 hover:bg-primary/60 cursor-col-resize shrink-0 transition-colors"
+            onMouseDown={() => { resizingPanelsRef.current = true }}
+          />
+
           <div className="flex-1 flex flex-col bg-surface-container-lowest overflow-hidden">
             <div className="flex items-center justify-between px-4 py-2 bg-surface-container-low border-b border-border shrink-0">
               <div className="flex items-center gap-2 px-3 py-1 bg-surface-container-highest rounded-lg text-xs font-semibold text-on-surface border border-outline-variant/20">
@@ -418,66 +713,20 @@ export default function SessionPage() {
         </div>
       </div>
 
-      {/* Floating PIP — same position as Home */}
-      <div
-        className="fixed z-50 w-64 rounded-2xl overflow-hidden glass-panel shadow-2xl select-none"
-        style={{ left: pip.pos.x, top: pip.pos.y }}
-        onMouseMove={(e) => pip.handleMove(e.clientX, e.clientY)}
-        onMouseUp={pip.stopDragging}
-        onMouseLeave={pip.stopDragging}
-        onTouchMove={(e) => { const t = e.touches[0]; pip.handleMove(t.clientX, t.clientY) }}
-        onTouchEnd={pip.stopDragging}
-      >
-        <div
-          className="flex items-center justify-between px-3 py-2 bg-surface-container/90 cursor-grab active:cursor-grabbing border-b border-white/5"
-          onMouseDown={pip.onMouseDown}
-          onTouchStart={pip.onTouchStart}
-        >
-          <div className="flex items-center gap-2">
-            <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse", avatarSpeaking ? "bg-primary" : isListening ? "bg-blue-400" : "bg-outline/40")} />
-            <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">AI Interviewer</span>
-          </div>
-          <div className="flex items-end gap-0.5">
-            {(avatarSpeaking || isListening) && (avatarSpeaking ? [0, 120, 240, 360, 480] : [0, 150, 300]).map((delay) => (
-              <div key={delay} className={cn("w-0.5 rounded-full bar-wave", avatarSpeaking ? "bg-primary" : "bg-blue-400")} style={{ animationDelay: `${delay}ms`, height: "8px" }} />
-            ))}
-          </div>
-        </div>
-        <div className="relative bg-surface-container-low" style={{ aspectRatio: "4/3" }}>
-          <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-gradient-to-br from-surface-container to-surface-container-highest">
-            <span
-              className="material-symbols-outlined text-7xl pip-idle transition-all duration-500"
-              style={{
-                fontVariationSettings: avatarSpeaking ? "'FILL' 1" : "'FILL' 0",
-                color: avatarSpeaking
-                  ? "rgba(224,90,58,0.9)"
-                  : isListening
-                  ? "rgba(96,165,250,0.85)"
-                  : "rgba(155,156,158,0.3)",
-              }}
-            >
-              {avatarSpeaking ? "record_voice_over" : "face"}
-            </span>
-            <span
-              className="text-[10px] uppercase tracking-widest font-semibold transition-colors duration-300"
-              style={{
-                color: avatarSpeaking
-                  ? "rgba(224,90,58,0.7)"
-                  : isListening
-                  ? "rgba(96,165,250,0.6)"
-                  : audioEnabled
-                  ? "rgba(155,156,158,0.3)"
-                  : "rgba(155,156,158,0.25)",
-              }}
-            >
-              {avatarSpeaking ? "Speaking" : isListening ? "Listening" : audioEnabled ? "Ready" : "Audio off"}
-            </span>
-          </div>
-          {(avatarSpeaking || isListening) && (
-            <span className={cn("absolute inset-0 animate-ping opacity-10", avatarSpeaking ? "bg-primary" : "bg-blue-400")} />
-          )}
-        </div>
-      </div>
+      <Avatar
+        speaking={avatarSpeaking}
+        listening={isListening}
+        audioEnabled={audioEnabled}
+        statusLabel={statusLabel}
+        pos={pip.pos}
+        personaText={session?.persona ?? undefined}
+        provider={avatarSession.provider}
+        personaSeed={avatarSession.persona_seed}
+        videoUrl={avatarVideoUrl}
+        analyserRef={analyserRef}
+        onMouseDown={pip.onMouseDown}
+        onTouchStart={pip.onTouchStart}
+      />
 
       {showClosingPrompt && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">

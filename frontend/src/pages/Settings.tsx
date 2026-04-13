@@ -3,9 +3,10 @@ import { Sidebar } from "@/components/Sidebar"
 import { cn } from "@/lib/utils"
 
 interface Settings {
-  llmProvider: "openai" | "gemini"
+  llmProvider: "openai" | "gemini" | "groq"
   openaiApiKey: string
   geminiApiKey: string
+  groqApiKey: string
   defaultDifficulty: "rare" | "medium" | "well_done"
   sessionTimeoutMins: number
   soundEnabled: boolean
@@ -19,6 +20,7 @@ const DEFAULTS: Settings = {
   llmProvider: "openai",
   openaiApiKey: "",
   geminiApiKey: "",
+  groqApiKey: "",
   defaultDifficulty: "medium",
   sessionTimeoutMins: 45,
   soundEnabled: false,
@@ -125,14 +127,21 @@ export default function SettingsPage() {
             {/* AI Provider */}
             <Section title="AI Provider">
               <Row label="Provider" description="Which AI model powers your interviews">
-                {/* Sliding segmented control */}
-                <div className="relative flex bg-surface-container rounded-lg p-1 w-40">
-                  {/* sliding pill */}
+                <div className="relative flex bg-surface-container rounded-lg p-1 w-52">
                   <div
-                    className="absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-md bg-primary/20 border border-primary/30 transition-transform duration-200 ease-out"
-                    style={{ transform: `translateX(${settings.llmProvider === "gemini" ? "calc(100% + 4px)" : "0"})` }}
+                    className="absolute top-1 bottom-1 rounded-md bg-primary/20 border border-primary/30 transition-transform duration-200 ease-out"
+                    style={{
+                      width: "calc(33.33% - 3px)",
+                      transform: `translateX(${
+                        settings.llmProvider === "gemini"
+                          ? "calc(100% + 4px)"
+                          : settings.llmProvider === "groq"
+                          ? "calc(200% + 8px)"
+                          : "0"
+                      })`,
+                    }}
                   />
-                  {(["openai", "gemini"] as const).map((p) => (
+                  {(["openai", "gemini", "groq"] as const).map((p) => (
                     <button
                       key={p}
                       onClick={() => update("llmProvider", p)}
@@ -146,27 +155,51 @@ export default function SettingsPage() {
                   ))}
                 </div>
               </Row>
-              {/* API key — updates for active provider */}
               <Row
                 label="API Key"
                 description={
                   settings.llmProvider === "openai"
-                    ? "sk-... from platform.openai.com"
-                    : "AIza... from aistudio.google.com"
+                    ? "sk-... · platform.openai.com"
+                    : settings.llmProvider === "gemini"
+                    ? "AIza... · aistudio.google.com"
+                    : "gsk_... · console.groq.com"
                 }
               >
                 <div className="relative">
                   <input
                     key={settings.llmProvider}
                     type="password"
-                    placeholder={settings.llmProvider === "openai" ? "sk-••••••••" : "AIza••••••••"}
-                    value={settings.llmProvider === "openai" ? settings.openaiApiKey : settings.geminiApiKey}
+                    placeholder={
+                      settings.llmProvider === "openai"
+                        ? "sk-••••••••"
+                        : settings.llmProvider === "gemini"
+                        ? "AIza••••••••"
+                        : "gsk_••••••••"
+                    }
+                    value={
+                      settings.llmProvider === "openai"
+                        ? settings.openaiApiKey
+                        : settings.llmProvider === "gemini"
+                        ? settings.geminiApiKey
+                        : settings.groqApiKey
+                    }
                     onChange={(e) =>
-                      update(settings.llmProvider === "openai" ? "openaiApiKey" : "geminiApiKey", e.target.value)
+                      update(
+                        settings.llmProvider === "openai"
+                          ? "openaiApiKey"
+                          : settings.llmProvider === "gemini"
+                          ? "geminiApiKey"
+                          : "groqApiKey",
+                        e.target.value,
+                      )
                     }
                     className="w-56 px-3 py-1.5 text-xs rounded-lg border border-primary/30 bg-surface-container-highest text-on-surface placeholder:text-outline/40 focus:outline-none focus:border-primary/60 transition-colors font-mono"
                   />
-                  {(settings.llmProvider === "openai" ? settings.openaiApiKey : settings.geminiApiKey) && (
+                  {(settings.llmProvider === "openai"
+                    ? settings.openaiApiKey
+                    : settings.llmProvider === "gemini"
+                    ? settings.geminiApiKey
+                    : settings.groqApiKey) && (
                     <span
                       className="absolute right-2 top-1/2 -translate-y-1/2 material-symbols-outlined text-green-400 text-sm"
                       style={{ fontVariationSettings: "'FILL' 1" }}

@@ -24,6 +24,12 @@ async def speak(body: SpeakRequest) -> Response:
     return Response(content=audio, media_type="audio/mpeg")
 
 
+@router.post("/speak-text")
+async def speak_text(body: SpeakRequest) -> Response:
+    audio = await tts.synthesize(text=body.text, voice=body.voice)
+    return Response(content=audio, media_type="audio/mpeg")
+
+
 @router.post("/speak-session/{session_id}")
 async def speak_session(
     session_id: int,

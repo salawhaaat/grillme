@@ -33,6 +33,7 @@ class Orchestrator:
         self,
         jd_raw: str,
         user_weaknesses: list[str] | None = None,
+        cv_text: str | None = None,
     ) -> PipelineResult:
         parsed = await self.parser.run(ParseInput(jd_raw=jd_raw))
 
@@ -50,6 +51,7 @@ class Orchestrator:
                 parsed_jd=parsed,
                 research=research_intel,
                 user_weaknesses=user_weaknesses or [],
+                cv_text=cv_text,
             )
         )
 

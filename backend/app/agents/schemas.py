@@ -45,6 +45,7 @@ class PersonaInput(BaseModel):
     parsed_jd: ParsedJD
     research: ResearchIntel | None = None
     user_weaknesses: list[str] = Field(default_factory=list)
+    cv_text: str | None = None
 
 
 class PersonaOutput(BaseModel):

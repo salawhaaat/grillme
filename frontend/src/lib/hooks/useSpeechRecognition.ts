@@ -9,7 +9,7 @@ type RecognitionLike = {
   onresult: ((event: SpeechRecognitionEventLike) => void) | null
   onstart: (() => void) | null
   onend: (() => void) | null
-  onerror: (() => void) | null
+  onerror: ((event: { error?: string }) => void) | null
 }
 
 type SpeechRecognitionEventLike = {
@@ -36,6 +36,8 @@ export function useSpeechRecognition() {
   const recognitionRef = useRef<RecognitionLike | null>(null)
   const finalRef = useRef("")
   const startedRef = useRef(false)
+  const desiredListeningRef = useRef(false)
+  const restartTimerRef = useRef<number | null>(null)
 
   const Recognition = useMemo(
     () => window.SpeechRecognition ?? window.webkitSpeechRecognition,
@@ -46,7 +48,7 @@ export function useSpeechRecognition() {
   useEffect(() => {
     if (!Recognition) return
     const recognition = new Recognition()
-    recognition.continuous = false
+    recognition.continuous = true
     recognition.interimResults = true
     recognition.lang = "en-US"
 
@@ -68,37 +70,73 @@ export function useSpeechRecognition() {
       setTranscript(`${finalRef.current}${interim}`.trim())
     }
 
-    recognition.onerror = () => {
+    recognition.onerror = (event) => {
       startedRef.current = false
       setIsListening(false)
+      const code = event?.error ?? ""
+      const shouldRetry = !["not-allowed", "service-not-allowed", "audio-capture"].includes(code)
+      if (!shouldRetry) {
+        desiredListeningRef.current = false
+        return
+      }
+      if (desiredListeningRef.current) {
+        if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current)
+        restartTimerRef.current = window.setTimeout(() => {
+          if (!recognitionRef.current || startedRef.current || !desiredListeningRef.current) return
+          try {
+            recognitionRef.current.start()
+          } catch { /* ignore */ }
+        }, 350)
+      }
     }
 
     recognition.onend = () => {
       startedRef.current = false
       setIsListening(false)
       setTranscript(finalRef.current.trim())
+      if (!desiredListeningRef.current) return
+      if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current)
+      restartTimerRef.current = window.setTimeout(() => {
+        if (!recognitionRef.current || startedRef.current || !desiredListeningRef.current) return
+        try {
+          recognition.start()
+        } catch { /* ignore */ }
+      }, 250)
     }
 
     recognitionRef.current = recognition
     return () => {
+      desiredListeningRef.current = false
+      if (restartTimerRef.current) {
+        window.clearTimeout(restartTimerRef.current)
+        restartTimerRef.current = null
+      }
       recognition.stop()
       recognitionRef.current = null
     }
   }, [Recognition])
 
   const start = useCallback(() => {
-    if (!recognitionRef.current || startedRef.current) return
+    desiredListeningRef.current = true
+    if (!recognitionRef.current) return
+    if (startedRef.current) return
     finalRef.current = ""
     setTranscript("")
-    startedRef.current = true
+    if (restartTimerRef.current) {
+      window.clearTimeout(restartTimerRef.current)
+      restartTimerRef.current = null
+    }
     try {
       recognitionRef.current.start()
-    } catch {
-      startedRef.current = false
-    }
+    } catch { /* ignore */ }
   }, [])
 
   const stop = useCallback(() => {
+    desiredListeningRef.current = false
+    if (restartTimerRef.current) {
+      window.clearTimeout(restartTimerRef.current)
+      restartTimerRef.current = null
+    }
     if (!recognitionRef.current || !startedRef.current) return
     try {
       recognitionRef.current.stop()

@@ -126,7 +126,12 @@ export default function Home() {
     setLoading(true)
     setError(null)
     try {
-      const res = await api.createSession(source, payload, difficulty)
+      const res = await api.createSession(
+        source,
+        payload,
+        difficulty,
+        source === "jd" ? cvText.trim() || undefined : undefined,
+      )
       setSessionId(res.session_id)
       setOpeningMessage(res.opening_message)
       setProblemStatement(res.problem.statement)

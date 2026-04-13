@@ -70,11 +70,16 @@ class LLMService:
             if content is not None:
                 yield content
 
-    async def complete(self, messages: list[dict], json_mode: bool = False) -> str:
+    async def complete(
+        self,
+        messages: list[dict],
+        json_mode: bool = False,
+        temperature: float | None = None,
+    ) -> str:
         provider = settings.llm_provider
 
         if provider in ("openai", "groq"):
-            return await self._complete_compat(messages, json_mode)
+            return await self._complete_compat(messages, json_mode, temperature)
         elif provider == "gemini":
             return await self._complete_gemini(messages)
         else:
@@ -136,7 +141,12 @@ class LLMService:
         )
         return final.choices[0].message.content or ""
 
-    async def _complete_compat(self, messages: list[dict], json_mode: bool = False) -> str:
+    async def _complete_compat(
+        self,
+        messages: list[dict],
+        json_mode: bool = False,
+        temperature: float | None = None,
+    ) -> str:
         provider = settings.llm_provider
         if provider == "groq":
             if not settings.groq_api_key:
@@ -153,6 +163,8 @@ class LLMService:
         kwargs: dict = dict(model=settings.llm_model, messages=messages)
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        if temperature is not None:
+            kwargs["temperature"] = temperature
 
         response = await client.chat.completions.create(**kwargs)
         return response.choices[0].message.content

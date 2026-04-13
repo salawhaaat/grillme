@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     groq_api_key: str = ""
     ollama_base_url: str = "http://localhost:11434"
+    avatar_provider: str = "local"
+    avatar_service_url: str = "http://localhost:8080"
+    videos_dir: str = "/tmp/grillme_videos"
 
     database_url: str = "sqlite+aiosqlite:///./app/data/grillme.db"
 

@@ -65,6 +65,20 @@ export interface Session {
   finished_at: string | null
 }
 
+export interface AvatarSessionInfo {
+  enabled: boolean
+  provider: "local" | "wav2lip"
+  persona_seed: string
+  reason?: string
+}
+
+export interface AvatarSpeakVideoInfo {
+  enabled: boolean
+  provider: "local" | "wav2lip"
+  reason?: string
+  video_url?: string
+}
+
 export interface SessionListItem {
   id: number
   mode: string
@@ -169,6 +183,19 @@ async function postBlob(path: string): Promise<Blob> {
   return res.blob()
 }
 
+async function postBlobJson(path: string, body: unknown): Promise<Blob> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.blob()
+}
+
 function normalizeScorecard(raw: RawScorecard | null): Scorecard | null {
   if (!raw || typeof raw.overall_score !== "number") return null
   const areasToImprove = raw.areas_to_improve ?? raw.improvements ?? []
@@ -196,8 +223,9 @@ export const api = {
     source: SessionSource,
     content: string,
     difficulty: Difficulty = "medium",
+    cv_text?: string,
   ) =>
-    post<CreateSessionResponse>("/sessions/create", { source, content, difficulty }),
+    post<CreateSessionResponse>("/sessions/create", { source, content, difficulty, cv_text }),
 
   createSessionFromJD: (
     jd: string,
@@ -214,6 +242,12 @@ export const api = {
 
   getSession: async (id: number) =>
     normalizeSession(await get<Session>(`/sessions/${id}`)),
+
+  getAvatarSession: (id: number) =>
+    get<AvatarSessionInfo>(`/avatar/session/${id}`),
+
+  getAvatarSpeakVideo: (id: number, text: string) =>
+    post<AvatarSpeakVideoInfo>(`/avatar/session/${id}/speak-video`, { text }),
 
   getUserMemory: () =>
     get<UserWeakness[]>("/sessions/memory"),
@@ -253,6 +287,12 @@ export const api = {
         voice ? `?voice=${encodeURIComponent(voice)}` : ""
       }`,
     ),
+
+  speakText: (text: string, voice?: string) =>
+    postBlobJson("/voice/speak-text", {
+      text,
+      ...(voice ? { voice } : {}),
+    }),
 }
 
 export async function* streamMessage(
