@@ -143,43 +143,42 @@ type RawScorecard = Partial<Scorecard> & {
   recommendation?: string
 }
 
+async function extractErrorMessage(res: Response): Promise<string> {
+  const text = await res.text()
+  if (!text) return `HTTP ${res.status}`
+  try {
+    const json = JSON.parse(text)
+    return json.detail ?? json.message ?? text
+  } catch {
+    return text
+  }
+}
+
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
-  }
+  if (!res.ok) throw new Error(await extractErrorMessage(res))
   return res.json()
 }
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`)
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
-  }
+  if (!res.ok) throw new Error(await extractErrorMessage(res))
   return res.json()
 }
 
 async function del<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { method: "DELETE" })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
-  }
+  if (!res.ok) throw new Error(await extractErrorMessage(res))
   return res.json()
 }
 
 async function postBlob(path: string): Promise<Blob> {
   const res = await fetch(`${BASE}${path}`, { method: "POST" })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
-  }
+  if (!res.ok) throw new Error(await extractErrorMessage(res))
   return res.blob()
 }
 
@@ -189,10 +188,7 @@ async function postBlobJson(path: string, body: unknown): Promise<Blob> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
-  }
+  if (!res.ok) throw new Error(await extractErrorMessage(res))
   return res.blob()
 }
 
@@ -304,10 +300,7 @@ export async function* streamMessage(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ content }),
   })
-  if (!res.ok || !res.body) {
-    const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
-  }
+  if (!res.ok || !res.body) throw new Error(await extractErrorMessage(res))
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   while (true) {

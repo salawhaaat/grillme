@@ -1,6 +1,7 @@
 from typing import AsyncIterator
 import asyncio
 import json
+import openai
 from openai import AsyncOpenAI
 from google import genai
 from google.genai.errors import ClientError, ServerError
@@ -35,21 +36,38 @@ class LLMService:
         else:
             raise ValueError(f"Unknown provider: '{provider}'")
 
+    @staticmethod
+    def _translate_openai_error(e: Exception) -> Exception:
+        """Convert OpenAI/Groq SDK errors into our domain exceptions."""
+        if isinstance(e, openai.RateLimitError):
+            return RateLimitError("Rate limit reached — please wait a few minutes and try again.")
+        if isinstance(e, openai.AuthenticationError):
+            return ProviderError("Invalid API key — check your .env file.")
+        if isinstance(e, openai.APIConnectionError):
+            return ProviderError("Could not reach the AI provider — check your internet connection.")
+        if isinstance(e, openai.OpenAIError):
+            return ProviderError(f"AI provider error: {e}")
+        return e
+
     async def _stream_openai(self, messages: list[dict]) -> AsyncIterator[str]:
         if not settings.openai_api_key:
             raise ValueError("OPENAI_API_KEY is not set in .env")
 
         client = AsyncOpenAI(api_key=settings.openai_api_key)
-        stream = await client.chat.completions.create(
-            model=settings.llm_model,
-            messages=messages,
-            stream=True,
-        )
-
-        async for chunk in stream:
-            content = chunk.choices[0].delta.content
-            if content is not None:
-                yield content
+        try:
+            stream = await client.chat.completions.create(
+                model=settings.llm_model,
+                messages=messages,
+                stream=True,
+            )
+            async for chunk in stream:
+                content = chunk.choices[0].delta.content
+                if content is not None:
+                    yield content
+        except (RateLimitError, ProviderError):
+            raise
+        except Exception as e:
+            raise self._translate_openai_error(e) from e
 
     async def _stream_groq(self, messages: list[dict]) -> AsyncIterator[str]:
         if not settings.groq_api_key:
@@ -59,16 +77,20 @@ class LLMService:
             api_key=settings.groq_api_key,
             base_url="https://api.groq.com/openai/v1",
         )
-        stream = await client.chat.completions.create(
-            model=settings.llm_model,
-            messages=messages,
-            stream=True,
-        )
-
-        async for chunk in stream:
-            content = chunk.choices[0].delta.content
-            if content is not None:
-                yield content
+        try:
+            stream = await client.chat.completions.create(
+                model=settings.llm_model,
+                messages=messages,
+                stream=True,
+            )
+            async for chunk in stream:
+                content = chunk.choices[0].delta.content
+                if content is not None:
+                    yield content
+        except (RateLimitError, ProviderError):
+            raise
+        except Exception as e:
+            raise self._translate_openai_error(e) from e
 
     async def complete(
         self,
@@ -166,8 +188,13 @@ class LLMService:
         if temperature is not None:
             kwargs["temperature"] = temperature
 
-        response = await client.chat.completions.create(**kwargs)
-        return response.choices[0].message.content
+        try:
+            response = await client.chat.completions.create(**kwargs)
+            return response.choices[0].message.content
+        except (RateLimitError, ProviderError):
+            raise
+        except Exception as e:
+            raise self._translate_openai_error(e) from e
 
     async def _complete_gemini(self, messages: list[dict]) -> str:
         if not settings.gemini_api_key:

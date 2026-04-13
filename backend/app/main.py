@@ -1,13 +1,18 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from app.core.database import init_db
+from app.core.logging import setup_logger
 from app.routes.problems import router as problems_router
 from app.routes.chat import router as chat_router
 from app.routes.code import router as code_router
 from app.routes.sessions import router as sessions_router
 from app.routes.voice import router as voice_router
 from app.routes.avatar import router as avatar_router
+from app.services.llm import RateLimitError, ProviderError
+
+logger = setup_logger(__name__)
 
 
 @asynccontextmanager
@@ -17,6 +22,37 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="grillme", version="0.1.0", lifespan=lifespan)
+
+
+@app.exception_handler(RateLimitError)
+async def rate_limit_handler(request: Request, exc: RateLimitError) -> JSONResponse:
+    return JSONResponse(status_code=429, content={"detail": str(exc)})
+
+
+@app.exception_handler(ProviderError)
+async def provider_error_handler(request: Request, exc: ProviderError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
+    msg = str(exc)
+    if "api_key" in msg.lower() or "API_KEY" in msg:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "API key not configured — add it to your .env file."},
+        )
+    return JSONResponse(status_code=422, content={"detail": msg})
+
+
+@app.exception_handler(Exception)
+async def generic_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error("Unhandled error on %s %s: %s", request.method, request.url.path, exc, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Something went wrong — please try again."},
+    )
+
 
 app.add_middleware(
     CORSMiddleware,
