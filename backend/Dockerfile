@@ -5,14 +5,14 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 WORKDIR /app
 
-# Dependency layer (cached unless pyproject.toml / uv.lock change)
+# Dependency layer — cached unless pyproject.toml / uv.lock change
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --no-cache
 
 # App code
 COPY app/ ./app/
 
-# Ensure DB and videos directories exist
+# Ensure DB and video directories exist (overridden by Docker volumes at runtime)
 RUN mkdir -p app/data /app/videos
 
 EXPOSE 8000
