@@ -37,5 +37,6 @@ dist/
 build/
 node_modules/
 
-# Wav2Lip models (large binary files — download separately)
-models/
+# Wav2Lip models — large binaries, download via ./download_models.sh
+models/*.onnx
+models/*.zip

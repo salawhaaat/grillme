@@ -1,5 +1,31 @@
 const BASE = "/api"
 
+// Push saved API key to backend on every page load so the user never has to edit .env
+;(function syncConfig() {
+  try {
+    const raw = localStorage.getItem("grillme_settings")
+    if (!raw) return
+    const s = JSON.parse(raw) as {
+      llmProvider?: string
+      openaiApiKey?: string
+      geminiApiKey?: string
+      groqApiKey?: string
+    }
+    const provider = s.llmProvider ?? ""
+    const key =
+      provider === "openai" ? (s.openaiApiKey ?? "") :
+      provider === "gemini" ? (s.geminiApiKey ?? "") :
+      (s.groqApiKey ?? "")
+    if (provider && key) {
+      fetch(`${BASE}/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, api_key: key }),
+      }).catch(() => {})
+    }
+  } catch { /* ignore */ }
+})()
+
 export type Difficulty = "rare" | "medium" | "well_done"
 export type SessionSource = "jd" | "url" | "text"
 
@@ -289,6 +315,9 @@ export const api = {
       text,
       ...(voice ? { voice } : {}),
     }),
+
+  saveConfig: (provider: string, apiKey: string) =>
+    post<{ ok: boolean }>("/config", { provider, api_key: apiKey }),
 }
 
 export async function* streamMessage(

@@ -10,6 +10,7 @@ from app.routes.code import router as code_router
 from app.routes.sessions import router as sessions_router
 from app.routes.voice import router as voice_router
 from app.routes.avatar import router as avatar_router
+from app.routes.config import router as config_router
 from app.services.llm import RateLimitError, ProviderError
 
 logger = setup_logger(__name__)
@@ -37,10 +38,10 @@ async def provider_error_handler(request: Request, exc: ProviderError) -> JSONRe
 @app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
     msg = str(exc)
-    if "api_key" in msg.lower() or "API_KEY" in msg:
+    if "api_key" in msg.lower() or "API_KEY" in msg or "Settings" in msg:
         return JSONResponse(
             status_code=422,
-            content={"detail": "API key not configured — add it to your .env file."},
+            content={"detail": msg},
         )
     return JSONResponse(status_code=422, content={"detail": msg})
 
@@ -67,6 +68,7 @@ app.include_router(code_router)
 app.include_router(sessions_router)
 app.include_router(voice_router)
 app.include_router(avatar_router)
+app.include_router(config_router)
 
 
 @app.get("/api/health")

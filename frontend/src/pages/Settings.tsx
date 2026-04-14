@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { Sidebar } from "@/components/Sidebar"
 import { cn } from "@/lib/utils"
+import { api } from "@/lib/api/client"
 
 interface Settings {
   llmProvider: "openai" | "gemini" | "groq"
@@ -95,6 +96,11 @@ export default function SettingsPage() {
 
   function handleSave() {
     localStorage.setItem("grillme_settings", JSON.stringify(settings))
+    const activeKey =
+      settings.llmProvider === "openai" ? settings.openaiApiKey :
+      settings.llmProvider === "gemini" ? settings.geminiApiKey :
+      settings.groqApiKey
+    api.saveConfig(settings.llmProvider, activeKey).catch(() => {})
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }

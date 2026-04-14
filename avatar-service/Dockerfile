@@ -18,12 +18,12 @@ WORKDIR /app
 RUN git clone --depth 1 https://github.com/instant-high/wav2lip-onnx-HQ /app/wav2lip
 
 # Python deps — install before copying app code for layer caching
-COPY requirements.txt .
+COPY avatar-service/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # FastAPI service + entrypoint
-COPY main.py .
-COPY entrypoint.sh .
+COPY avatar-service/main.py .
+COPY avatar-service/entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
 # Default face image (public demo presenter — override by mounting /app/face.jpg)
@@ -31,8 +31,8 @@ RUN curl -fsSL \
     "https://create-images-results.d-id.com/DefaultPresenters/Noelle_f/image.png" \
     -o /app/face.jpg
 
-# /app/models is bind-mounted from the host at runtime (see docker-compose.yml)
-RUN mkdir -p /app/models
+# Bake models into the image (populated by ./download_models.sh before build)
+COPY models/ /app/models/
 
 EXPOSE 8080
 

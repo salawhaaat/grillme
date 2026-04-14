@@ -26,14 +26,14 @@ services:
       - backend
 
   # ── Wav2Lip avatar microservice ──────────────────────────────────────────────
-  # Model setup (one-time): download files from Google Drive into ./models/
-  # See README for the exact files needed.
+  # Before building: run ./download_models.sh to populate ./models/
+  # docker compose build then bakes the models into the image (no runtime mount).
   avatar:
-    build: ./avatar-service
+    build:
+      context: .
+      dockerfile: avatar-service/Dockerfile
     ports:
       - "8080:8080"
-    volumes:
-      - ./models:/app/models
     environment:
       FACE_IMAGE: "/app/face.jpg"
 

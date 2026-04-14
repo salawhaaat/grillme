@@ -85,7 +85,7 @@ async def test_raises_without_openai_key():
         s.llm_provider = "openai"
         s.openai_api_key = ""
 
-        with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+        with pytest.raises(ValueError, match="OpenAI API key"):
             await collect(LLMService().stream_chat(MESSAGES))
 
 
@@ -119,7 +119,7 @@ async def test_raises_without_gemini_key():
         s.llm_provider = "gemini"
         s.gemini_api_key = ""
 
-        with pytest.raises(ValueError, match="GEMINI_API_KEY"):
+        with pytest.raises(ValueError, match="Gemini API key"):
             await collect(LLMService().stream_chat(MESSAGES))
 
 

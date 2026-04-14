@@ -24,3 +24,19 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# ── Runtime overrides (set via POST /api/config, beat .env) ──────────────────
+_runtime: dict[str, str] = {}
+
+
+def set_runtime_config(provider: str, api_key: str) -> None:
+    _runtime["provider"] = provider
+    _runtime["api_key"] = api_key
+
+
+def get_runtime_provider() -> str:
+    return _runtime.get("provider", "")
+
+
+def get_runtime_api_key() -> str:
+    return _runtime.get("api_key", "")

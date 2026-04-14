@@ -5,7 +5,7 @@ import openai
 from openai import AsyncOpenAI
 from google import genai
 from google.genai.errors import ClientError, ServerError
-from app.core.config import settings
+from app.core.config import settings, get_runtime_provider, get_runtime_api_key
 from app.core.logging import setup_logger
 from app.services.tools import TOOL_REGISTRY
 
@@ -21,8 +21,22 @@ class ProviderError(Exception):
 
 
 class LLMService:
+    def _active_provider(self) -> str:
+        return get_runtime_provider() or settings.llm_provider
+
+    def _api_key_for(self, provider: str) -> str:
+        if get_runtime_provider() == provider:
+            return get_runtime_api_key()
+        if provider == "openai":
+            return settings.openai_api_key
+        if provider == "groq":
+            return settings.groq_api_key
+        if provider == "gemini":
+            return settings.gemini_api_key
+        return ""
+
     async def stream_chat(self, messages: list[dict]) -> AsyncIterator[str]:
-        provider = settings.llm_provider
+        provider = self._active_provider()
 
         if provider == "openai":
             async for chunk in self._stream_openai(messages):
@@ -42,7 +56,7 @@ class LLMService:
         if isinstance(e, openai.RateLimitError):
             return RateLimitError("Rate limit reached — please wait a few minutes and try again.")
         if isinstance(e, openai.AuthenticationError):
-            return ProviderError("Invalid API key — check your .env file.")
+            return ProviderError("Invalid API key — check Settings.")
         if isinstance(e, openai.APIConnectionError):
             return ProviderError("Could not reach the AI provider — check your internet connection.")
         if isinstance(e, openai.OpenAIError):
@@ -50,10 +64,11 @@ class LLMService:
         return e
 
     async def _stream_openai(self, messages: list[dict]) -> AsyncIterator[str]:
-        if not settings.openai_api_key:
-            raise ValueError("OPENAI_API_KEY is not set in .env")
+        key = self._api_key_for("openai")
+        if not key:
+            raise ValueError("No OpenAI API key — add it in Settings.")
 
-        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        client = AsyncOpenAI(api_key=key)
         try:
             stream = await client.chat.completions.create(
                 model=settings.llm_model,
@@ -70,11 +85,12 @@ class LLMService:
             raise self._translate_openai_error(e) from e
 
     async def _stream_groq(self, messages: list[dict]) -> AsyncIterator[str]:
-        if not settings.groq_api_key:
-            raise ValueError("GROQ_API_KEY is not set in .env")
+        key = self._api_key_for("groq")
+        if not key:
+            raise ValueError("No Groq API key — add it in Settings.")
 
         client = AsyncOpenAI(
-            api_key=settings.groq_api_key,
+            api_key=key,
             base_url="https://api.groq.com/openai/v1",
         )
         try:
@@ -98,7 +114,7 @@ class LLMService:
         json_mode: bool = False,
         temperature: float | None = None,
     ) -> str:
-        provider = settings.llm_provider
+        provider = self._active_provider()
 
         if provider in ("openai", "groq"):
             return await self._complete_compat(messages, json_mode, temperature)
@@ -113,21 +129,20 @@ class LLMService:
         tools: list[dict] | None = None,
         max_tool_calls: int = 3,
     ) -> str:
-        provider = settings.llm_provider
+        provider = self._active_provider()
         if provider == "gemini":
             return await self.complete(messages)
 
+        key = self._api_key_for(provider)
+        if not key:
+            raise ValueError(f"No {provider.capitalize()} API key — add it in Settings.")
         if provider == "groq":
-            if not settings.groq_api_key:
-                raise ValueError("GROQ_API_KEY is not set in .env")
             client = AsyncOpenAI(
-                api_key=settings.groq_api_key,
+                api_key=key,
                 base_url="https://api.groq.com/openai/v1",
             )
         else:
-            if not settings.openai_api_key:
-                raise ValueError("OPENAI_API_KEY is not set in .env")
-            client = AsyncOpenAI(api_key=settings.openai_api_key)
+            client = AsyncOpenAI(api_key=key)
 
         convo = list(messages)
         for _ in range(max_tool_calls):
@@ -169,18 +184,17 @@ class LLMService:
         json_mode: bool = False,
         temperature: float | None = None,
     ) -> str:
-        provider = settings.llm_provider
+        provider = self._active_provider()
+        key = self._api_key_for(provider)
+        if not key:
+            raise ValueError(f"No {provider.capitalize()} API key — add it in Settings.")
         if provider == "groq":
-            if not settings.groq_api_key:
-                raise ValueError("GROQ_API_KEY is not set in .env")
             client = AsyncOpenAI(
-                api_key=settings.groq_api_key,
+                api_key=key,
                 base_url="https://api.groq.com/openai/v1",
             )
         else:
-            if not settings.openai_api_key:
-                raise ValueError("OPENAI_API_KEY is not set in .env")
-            client = AsyncOpenAI(api_key=settings.openai_api_key)
+            client = AsyncOpenAI(api_key=key)
 
         kwargs: dict = dict(model=settings.llm_model, messages=messages)
         if json_mode:
@@ -197,10 +211,11 @@ class LLMService:
             raise self._translate_openai_error(e) from e
 
     async def _complete_gemini(self, messages: list[dict]) -> str:
-        if not settings.gemini_api_key:
-            raise ValueError("GEMINI_API_KEY is not set in .env")
+        key = self._api_key_for("gemini")
+        if not key:
+            raise ValueError("No Gemini API key — add it in Settings.")
 
-        client = genai.Client(api_key=settings.gemini_api_key)
+        client = genai.Client(api_key=key)
         prompt = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages)
 
         try:
@@ -217,10 +232,11 @@ class LLMService:
             raise ProviderError(str(e)) from e
 
     async def _stream_gemini(self, messages: list[dict]) -> AsyncIterator[str]:
-        if not settings.gemini_api_key:
-            raise ValueError("GEMINI_API_KEY is not set in .env")
+        key = self._api_key_for("gemini")
+        if not key:
+            raise ValueError("No Gemini API key — add it in Settings.")
 
-        client = genai.Client(api_key=settings.gemini_api_key)
+        client = genai.Client(api_key=key)
 
         prompt = "\n".join(
             f"{m['role'].upper()}: {m['content']}" for m in messages
