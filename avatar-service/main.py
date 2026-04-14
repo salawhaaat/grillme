@@ -1,14 +1,20 @@
 """
-Wav2Lip ONNX avatar microservice.
+Wav2Lip ONNX-HQ avatar microservice.
 
 POST /generate  { text, voice } → MP4 video bytes
 GET  /health    → { status, model_ready }
 
 Setup (one-time):
-  1. Clone https://github.com/instant-high/wav2lip-onnx into /app/wav2lip
-  2. Download checkpoints from the repo's Google Drive link into /app/checkpoints/
-     Required files: wav2lip_gan.onnx  (≈360 MB)
+  1. Clone https://github.com/instant-high/wav2lip-onnx-HQ into /app/wav2lip
+     (done automatically in Docker image)
+  2. Download all ONNX checkpoints from Google Drive into /app/checkpoints/:
+     https://drive.google.com/drive/folders/1BGl9bmMtlGEMx_wwKufJrZChFyqjnlsQ
+     Required: wav2lip_gan.onnx (≈360 MB) + face detector models
   3. Place a face image at /app/face.jpg  (or set FACE_IMAGE env var)
+
+Optional env vars:
+  WAV2LIP_ENHANCER  — face enhancer: none (default) | gfpgan | gpen | codeformer | restoreformer
+                      gfpgan gives the best quality but requires its ONNX model in /app/checkpoints/
 """
 
 import asyncio
@@ -30,6 +36,7 @@ WAV2LIP_DIR = Path(os.getenv("WAV2LIP_DIR", "/app/wav2lip"))
 CHECKPOINT = Path(os.getenv("WAV2LIP_CHECKPOINT", "/app/checkpoints/wav2lip_gan.onnx"))
 FACE_IMAGE = Path(os.getenv("FACE_IMAGE", "/app/face.jpg"))
 INFERENCE_SCRIPT = WAV2LIP_DIR / "inference_onnxModel.py"
+ENHANCER = os.getenv("WAV2LIP_ENHANCER", "none")  # none | gfpgan | gpen | codeformer | restoreformer
 
 
 class GenerateRequest(BaseModel):
@@ -53,7 +60,8 @@ async def generate(req: GenerateRequest) -> Response:
         raise HTTPException(
             503,
             f"Wav2Lip model not found at {CHECKPOINT}. "
-            "Download wav2lip_gan.onnx from the wav2lip-onnx Google Drive link and place it in /app/checkpoints/.",
+            "Download all ONNX checkpoints from https://drive.google.com/drive/folders/1BGl9bmMtlGEMx_wwKufJrZChFyqjnlsQ "
+            "and place them in /app/checkpoints/.",
         )
     if not FACE_IMAGE.exists():
         raise HTTPException(
@@ -65,7 +73,7 @@ async def generate(req: GenerateRequest) -> Response:
         raise HTTPException(
             503,
             f"Wav2Lip script not found at {INFERENCE_SCRIPT}. "
-            "Clone https://github.com/instant-high/wav2lip-onnx into /app/wav2lip.",
+            "Clone https://github.com/instant-high/wav2lip-onnx-HQ into /app/wav2lip.",
         )
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="av_"))
@@ -80,7 +88,7 @@ async def generate(req: GenerateRequest) -> Response:
         if not wav_path.exists() or wav_path.stat().st_size == 0:
             raise HTTPException(500, "TTS failed to produce audio")
 
-        # 2. WAV + face image → MP4 via Wav2Lip ONNX
+        # 2. WAV + face image → MP4 via Wav2Lip ONNX-HQ
         cmd = [
             "python",
             str(INFERENCE_SCRIPT),
@@ -88,9 +96,10 @@ async def generate(req: GenerateRequest) -> Response:
             "--face", str(FACE_IMAGE),
             "--audio", str(wav_path),
             "--outfile", str(out_path),
-            "--pads", "0", "10", "0", "0",
             "--fps", "25",
-            "--nosmooth",
+            "--hq_output",
+            "--denoise",
+            "--enhancer", ENHANCER,
         ]
         proc = await asyncio.create_subprocess_exec(
             *cmd,

@@ -1,6 +1,7 @@
 FROM python:3.10-slim
 
-# System deps: ffmpeg for video, OpenCV runtime libs, C++ compiler for insightface
+# System deps: ffmpeg for video, OpenCV runtime libs
+# No C++ compiler needed — HQ version uses pre-built ONNX face detectors
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsm6 \
@@ -8,14 +9,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender1 \
     git \
     curl \
-    build-essential \
-    cmake \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Clone wav2lip-onnx (code only; models downloaded separately into a volume)
-RUN git clone --depth 1 https://github.com/instant-high/wav2lip-onnx /app/wav2lip
+# Clone wav2lip-onnx-HQ (code only; models downloaded separately into a volume)
+RUN git clone --depth 1 https://github.com/instant-high/wav2lip-onnx-HQ /app/wav2lip
 
 # Python deps — install before copying app code for layer caching
 COPY requirements.txt .
