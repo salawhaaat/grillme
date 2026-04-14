@@ -26,29 +26,17 @@ services:
       - backend
 
   # ── Wav2Lip avatar microservice ──────────────────────────────────────────────
-  # First-time model setup (run once after `docker compose build`):
-  #
-  #   1. Download wav2lip_gan.onnx from the Google Drive link in:
-  #      https://github.com/instant-high/wav2lip-onnx  (README → checkpoints/)
-  #
-  #   2. Load it into the named volume:
-  #        docker run --rm \
-  #          -v grillme_avatar_models:/dst \
-  #          -v /absolute/path/to/wav2lip_gan.onnx:/src/model.onnx \
-  #          alpine cp /src/model.onnx /dst/wav2lip_gan.onnx
-  #
-  #   The service returns 503 until the model file is present — no silent failures.
+  # Model setup (one-time): download files from Google Drive into ./models/
+  # See README for the exact files needed.
   avatar:
     build: ./avatar-service
     ports:
       - "8080:8080"
     volumes:
-      - avatar_models:/app/checkpoints
+      - ./models:/app/models
     environment:
-      WAV2LIP_CHECKPOINT: "/app/checkpoints/wav2lip_gan.onnx"
       FACE_IMAGE: "/app/face.jpg"
 
 volumes:
   db_data:
   avatar_videos:
-  avatar_models:

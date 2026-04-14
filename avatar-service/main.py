@@ -21,7 +21,6 @@ import asyncio
 import os
 import shutil
 import tempfile
-import uuid
 from pathlib import Path
 
 import edge_tts
@@ -33,10 +32,30 @@ app = FastAPI(title="avatar-service")
 
 # ── paths (all overridable via env) ──────────────────────────────────────────
 WAV2LIP_DIR = Path(os.getenv("WAV2LIP_DIR", "/app/wav2lip"))
-CHECKPOINT = Path(os.getenv("WAV2LIP_CHECKPOINT", "/app/checkpoints/wav2lip_gan.onnx"))
 FACE_IMAGE = Path(os.getenv("FACE_IMAGE", "/app/face.jpg"))
 INFERENCE_SCRIPT = WAV2LIP_DIR / "inference_onnxModel.py"
-ENHANCER = os.getenv("WAV2LIP_ENHANCER", "none")  # none | gfpgan | gpen | codeformer | restoreformer
+ENHANCER = os.getenv("WAV2LIP_ENHANCER", "none")  # none|gfpgan|gpen|codeformer|restoreformer
+
+
+def _find_checkpoint() -> Path:
+    """Return the wav2lip ONNX checkpoint, auto-detecting filename if needed."""
+    explicit = os.getenv("WAV2LIP_CHECKPOINT")
+    if explicit:
+        return Path(explicit)
+    checkpoints_dir = WAV2LIP_DIR / "checkpoints"
+    # Try common names first
+    for name in ("wav2lip_gan.onnx", "wav2lip_384.onnx", "wav2lip.onnx"):
+        p = checkpoints_dir / name
+        if p.exists():
+            return p
+    # Fall back to any .onnx in the dir
+    candidates = sorted(checkpoints_dir.glob("*.onnx"))
+    if candidates:
+        return candidates[0]
+    return checkpoints_dir / "wav2lip_gan.onnx"  # for error message
+
+
+CHECKPOINT = _find_checkpoint()
 
 
 class GenerateRequest(BaseModel):
@@ -60,8 +79,8 @@ async def generate(req: GenerateRequest) -> Response:
         raise HTTPException(
             503,
             f"Wav2Lip model not found at {CHECKPOINT}. "
-            "Download all ONNX checkpoints from https://drive.google.com/drive/folders/1BGl9bmMtlGEMx_wwKufJrZChFyqjnlsQ "
-            "and place them in /app/checkpoints/.",
+            "Download ONNX checkpoints from Google Drive (see README) "
+            "and place them in the models/ folder.",
         )
     if not FACE_IMAGE.exists():
         raise HTTPException(
@@ -98,9 +117,10 @@ async def generate(req: GenerateRequest) -> Response:
             "--outfile", str(out_path),
             "--fps", "25",
             "--hq_output",
-            "--denoise",
             "--enhancer", ENHANCER,
         ]
+        if (WAV2LIP_DIR / "resemble_denoiser" / "denoiser.onnx").exists():
+            cmd.append("--denoise")
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(WAV2LIP_DIR),

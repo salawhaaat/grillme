@@ -36,3 +36,6 @@ backend/README.md
 dist/
 build/
 node_modules/
+
+# Wav2Lip models (large binary files — download separately)
+models/
