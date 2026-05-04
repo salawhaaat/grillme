@@ -26,6 +26,7 @@ POST /api/stt
 import asyncio
 import contextlib
 import json
+import re
 import struct
 from typing import AsyncIterator
 
@@ -44,6 +45,32 @@ from app.services.sentence_splitter import split_sentences
 
 logger = setup_logger(__name__)
 router = APIRouter(prefix="/api/converse", tags=["converse"])
+
+
+def _clean_for_speech(text: str) -> str:
+    """Strip markdown formatting before passing to TTS or wav2lip.
+
+    LLM often outputs **bold**, *italic*, `code`, bullet lists etc.
+    Edge-tts would literally say "asterisk asterisk word asterisk asterisk".
+    """
+    # Bold / italic / bold-italic  (**text**, *text*, ***text***, __text__, _text_)
+    text = re.sub(r"\*{1,3}([^*\n]+)\*{1,3}", r"\1", text)
+    text = re.sub(r"_{1,3}([^_\n]+)_{1,3}", r"\1", text)
+    # Inline code and code blocks
+    text = re.sub(r"```[\s\S]*?```", "", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    # ATX headers  (## Heading)
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    # Bullet / numbered list markers
+    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*\d+\.\s+", "", text, flags=re.MULTILINE)
+    # Markdown links  [label](url)  →  label
+    text = re.sub(r"\[([^\]]+)\]\([^\)]*\)", r"\1", text)
+    # Horizontal rules
+    text = re.sub(r"^[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
+    # Collapse whitespace
+    text = re.sub(r"\n{2,}", " ", text)
+    return " ".join(text.split()).strip()
 
 llm = LLMService()
 
@@ -147,6 +174,7 @@ async def _voice_pipeline(
         if cancel.is_set():
             return
         collected_text.append(sentence)
+        sentence = _clean_for_speech(sentence)
 
         # Collect all MP3 bytes for this sentence
         sentence_bytes = bytearray()
@@ -390,8 +418,16 @@ async def converse_respond(
     except Exception:
         logger.exception("Failed to persist respond messages")
 
-    # Always render the actual LLM response via wav2lip so video matches chat text.
-    # Pre-rendered scenario clips are intentionally NOT used here — they play scripted
-    # audio that doesn't match response_text, making chat and video show different things.
-    job_id = avatar_service.start_response_job(response_text, body.voice, persona=session.persona)
-    return {"job_id": job_id, "text": response_text, "prerendered": False}
+    # Strip markdown before TTS/wav2lip — LLM outputs **bold** etc. which edge-tts
+    # reads literally as "asterisk asterisk bold asterisk asterisk".
+    # Dialogue shows response_text (with markdown for ReactMarkdown rendering).
+    # Audio and video use speech_text (clean plain text).
+    speech_text = _clean_for_speech(response_text)
+
+    job_id = avatar_service.start_response_job(speech_text, body.voice, persona=session.persona)
+    return {
+        "job_id": job_id,
+        "text": response_text,       # markdown — for dialogue rendering
+        "speech_text": speech_text,  # plain — for TTS playback
+        "prerendered": False,
+    }

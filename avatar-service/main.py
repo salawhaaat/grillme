@@ -128,6 +128,10 @@ def _ensure_live_worker_ready(
     module.args.enhancer = "none"
     module.args.hq_output = False
     module.args.denoise = False
+    # resize_factor: downsample face internally during inference for speed.
+    # Face image should be ≥256px; resize_factor=2 halves it to ~256px at runtime.
+    if hasattr(module.args, "resize_factor"):
+        module.args.resize_factor = 2
 
     # Keep ONNX model loaded in this long-lived worker process.
     cached_model = module.load_model(module.device)
@@ -159,6 +163,8 @@ def _render_interactive_video(
     module.args.enhancer = "none"
     module.args.hq_output = False
     module.args.denoise = False
+    if hasattr(module.args, "resize_factor"):
+        module.args.resize_factor = 2
     module.main()
 
 

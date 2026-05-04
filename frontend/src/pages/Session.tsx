@@ -344,7 +344,7 @@ export default function SessionPage() {
 
       // 2. LLM → get response text + kick off wav2lip job
       setLatestReply("Thinking…")
-      const { job_id, text: responseText, video_url, prerendered } = await api.startConverseRespond(sessionId, text, derivedVoice)
+      const { job_id, text: responseText, speech_text, video_url, prerendered } = await api.startConverseRespond(sessionId, text, derivedVoice)
 
       setDialogue((prev) => [...prev, { id: `assistant-${Date.now()}`, role: "assistant", text: responseText }])
       setLatestReply("")
@@ -357,7 +357,7 @@ export default function SessionPage() {
         setTurnState("speaking")
       } else {
         // Fire TTS fetch immediately — do NOT await (Bug 3 fix: no serial blocking)
-        const ttsPromise = api.speakText(responseText, derivedVoice).catch(() => null)
+        const ttsPromise = api.speakText(speech_text || responseText, derivedVoice).catch(() => null)
 
         if (job_id) {
           // Avatar video is primary — start rendering state and poll immediately
@@ -480,7 +480,7 @@ export default function SessionPage() {
 
       // LLM → get response text + kick off wav2lip job
       setLatestReply("Thinking…")
-      const { job_id, text: responseText, video_url, prerendered } = await api.startConverseRespond(sessionId, text, derivedVoice)
+      const { job_id, text: responseText, speech_text, video_url, prerendered } = await api.startConverseRespond(sessionId, text, derivedVoice)
 
       setDialogue((prev) => [...prev, { id: `assistant-${Date.now()}`, role: "assistant", text: responseText }])
       setLatestReply("")
@@ -491,7 +491,7 @@ export default function SessionPage() {
         setActiveVideo(video_url)
         setTurnState("speaking")
       } else {
-        const ttsPromise = api.speakText(responseText, derivedVoice).catch(() => null)
+        const ttsPromise = api.speakText(speech_text || responseText, derivedVoice).catch(() => null)
 
         if (job_id) {
           setTurnState("rendering")

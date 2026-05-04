@@ -361,7 +361,7 @@ export const api = {
    * job_id is null when wav2lip is not configured (text-only fallback).
    */
   startConverseRespond: (sessionId: number, text: string, voice: string) =>
-    post<{ job_id: string | null; text: string; video_url?: string; prerendered?: boolean }>("/converse/respond", {
+    post<{ job_id: string | null; text: string; speech_text: string; video_url?: string; prerendered?: boolean }>("/converse/respond", {
       session_id: sessionId,
       text,
       voice,
