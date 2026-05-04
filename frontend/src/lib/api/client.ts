@@ -343,6 +343,10 @@ export const api = {
   getSmallTalkClips: () =>
     get<{ clips: string[] }>("/avatar/smalltalk"),
 
+  /** Get pre-rendered thinking filler clip URLs (played while LLM+TTS renders). */
+  getThinkingClips: () =>
+    get<{ clips: string[] }>("/avatar/thinking"),
+
   /** Fetch pre-rendered scenario clip manifest. */
   getScenarioManifest: () =>
     get<{ clips: Array<{phase: string; index: number; text: string; path: string}> }>("/avatar/scenarios"),
@@ -368,6 +372,14 @@ export const api = {
     get<{ status: "pending" | "done" | "error" | "not_found"; video_url?: string; error?: string }>(
       `/avatar/job/${jobId}`,
     ),
+
+  /** Start a test wav2lip render without a session. Returns job_id to poll. */
+  renderTest: (text: string, voice?: string) =>
+    post<{ job_id: string }>("/avatar/render-test", { text, ...(voice ? { voice } : {}) }),
+
+  /** List all generated video files in VIDEOS_DIR. */
+  listVideos: () =>
+    get<{ videos: Array<{ name: string; path: string; url: string; size_kb: number }> }>("/avatar/videos"),
 
   /**
    * One-shot STT: POST raw audio bytes (WAV, webm/opus, or mp4/aac).

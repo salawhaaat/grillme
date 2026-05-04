@@ -31,6 +31,10 @@ const PHOTO = {
   f: "/interviewer-f.jpg",
 } as const
 
+const AVATAR_MEDIA_CLASS = "absolute inset-0 w-full h-full object-cover object-top"
+const PIP_WIDTH_PX = 128
+const PIP_RIGHT_MARGIN_PX = 72
+
 function extractName(text?: string): string {
   if (!text?.trim()) return "AI Interviewer"
   const m =
@@ -100,7 +104,7 @@ export default function SessionPage() {
   const location = useLocation()
   const sessionId = Number(id)
   const timer = useTimer(sessionId)
-  const pip = useDraggable({ x: window.innerWidth - 280, y: 80 })
+  const pip = useDraggable({ x: window.innerWidth - (PIP_WIDTH_PX + PIP_RIGHT_MARGIN_PX), y: 80 })
 
   // ── Eagerly request mic permission on mount ───────────────────────────────
   // This makes the OS mic indicator appear immediately so the user knows
@@ -177,6 +181,7 @@ export default function SessionPage() {
   const ttsUrlRef = useRef<string>("")
   const ttsFinishedRef = useRef(false)   // true when TTS audio ended before video arrived
   const turnStateRef = useRef<VoiceTurnState>("idle")
+  const thinkingClipsRef = useRef<string[]>([])
 
   const isSpeaking = turnState === "speaking"
   const isRecording = turnState === "recording"
@@ -266,12 +271,7 @@ export default function SessionPage() {
         if (job.status === "done" && job.video_url) {
           if (jobPollerRef.current) clearInterval(jobPollerRef.current)
           jobPollerRef.current = null
-          // If TTS already finished, skip the silent video — user already heard the response
-          if (ttsFinishedRef.current) {
-            setTurnState("idle")
-            processingRef.current = false
-            return
-          }
+          // Stop TTS if still playing — video has its own audio
           if (audioRef.current) {
             audioRef.current.pause()
             audioRef.current.src = ""
@@ -280,6 +280,12 @@ export default function SessionPage() {
           if (ttsUrlRef.current) {
             URL.revokeObjectURL(ttsUrlRef.current)
             ttsUrlRef.current = ""
+          }
+          // Mute video if TTS already finished — user heard the audio, but still
+          // show the video so they can see wav2lip is working (lip sync visible)
+          if (videoRef.current) {
+            videoRef.current.muted = ttsFinishedRef.current
+            videoRef.current.volume = ttsFinishedRef.current ? 0 : 1
           }
           setShowPhoto(false)
           setActiveVideo(job.video_url)
@@ -441,12 +447,26 @@ export default function SessionPage() {
     await submitPttBlob(blob)
   }
 
+  // Play a random pre-rendered thinking clip immediately while LLM+TTS processes.
+  // This bridges the ~2-3s latency gap and keeps the avatar visually active.
+  function playThinkingFiller() {
+    const clips = thinkingClipsRef.current
+    if (!clips.length) return
+    const url = clips[Math.floor(Math.random() * clips.length)]
+    setShowPhoto(false)
+    setActiveVideo(url)
+    setTurnState("speaking")
+  }
+
   async function submitPttBlob(blob: Blob) {
     if (processingRef.current) return
     processingRef.current = true
-    setTurnState("processing")
     setTranscribedText("")
     setError(null)
+
+    // Play filler immediately — avatar reacts before LLM responds
+    playThinkingFiller()
+    setTurnState("processing")
 
     try {
       const text = await api.sttOneshot(blob)
@@ -514,7 +534,9 @@ export default function SessionPage() {
     Promise.all([
       api.getSession(sessionId),
       api.getSmallTalkClips().catch(() => ({ clips: [] as string[] })),
-    ]).then(([s, { clips }]) => {
+      api.getThinkingClips().catch(() => ({ clips: [] as string[] })),
+    ]).then(([s, { clips }, { clips: thinkingClips }]) => {
+      thinkingClipsRef.current = thinkingClips
       setSession(s)
       const nav = location.state as { starterCode?: string; problemStatement?: string } | null
       if (s.problem_statement) {
@@ -900,7 +922,7 @@ export default function SessionPage() {
 
       {/* ── Avatar PIP (wav2lip video or static photo) ────────────────── */}
       <div
-        className="fixed z-50 w-52 rounded-2xl overflow-hidden glass-panel shadow-2xl select-none touch-none"
+        className="fixed z-50 w-32 rounded-2xl overflow-hidden glass-panel shadow-2xl select-none touch-none"
         style={{ left: pip.pos.x, top: pip.pos.y }}
       >
         {/* Title bar / drag handle */}
@@ -950,17 +972,13 @@ export default function SessionPage() {
           />
 
           <div className="w-full h-full relative overflow-hidden bg-[#1a1a1a]">
-            {/* Static photo — matches wav2lip video framing exactly */}
-            <div
-              className="absolute inset-0 transition-opacity duration-500"
+            {/* Static photo — uses same class as video for identical framing */}
+            <img
+              src={photoSrc}
+              alt={personaName}
+              className={`${AVATAR_MEDIA_CLASS} transition-opacity duration-500`}
               style={{ opacity: showPhoto && !activeVideo ? 1 : 0 }}
-            >
-              <img
-                src={photoSrc}
-                alt={personaName}
-                className="w-full h-full object-cover object-top"
-              />
-            </div>
+            />
 
             {/* Wav2lip video */}
             {activeVideo && (
@@ -977,7 +995,7 @@ export default function SessionPage() {
                   vid.volume = ttsFinishedRef.current ? 0 : 1.0
                   vid.play().catch(() => {})
                 }}
-                className="absolute inset-0 w-full h-full object-cover object-top"
+                className={AVATAR_MEDIA_CLASS}
               />
             )}
 

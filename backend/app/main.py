@@ -25,6 +25,7 @@ async def lifespan(app: FastAPI):
     await init_db()   # создаёт таблицы при старте
     if avatar_service._is_wav2lip_enabled():
         asyncio.create_task(avatar_service.prerender_smalltalk_clips())
+        asyncio.create_task(avatar_service.prerender_thinking_clips())
         asyncio.create_task(avatar_service.prerender_scenario_clips())
     yield
 

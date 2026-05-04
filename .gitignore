@@ -23,7 +23,8 @@ htmlcov/
 # OS
 .DS_Store
 
-# Docs
+# Claude Code instructions (local only, not for repo)
+CLAUDE.md
 CLAUDE.MD
 
 # Internal project notes
@@ -37,6 +38,8 @@ dist/
 build/
 node_modules/
 
-# Wav2Lip models — large binaries, download via ./download_models.sh
-models/*.onnx
-models/*.zip
+# Models — large binaries, download via ./download_models.sh
+models/
+
+# Generated videos (runtime output, not source)
+/tmp/grillme_videos/

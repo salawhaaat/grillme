@@ -180,7 +180,9 @@ FastAPI (backend/)
 
 Avatar service (Docker only — avatar-service/)
   POST /generate    — text → edge-tts audio → wav2lip-onnx → MP4
-  Runs fully local, no API key needed, CPU ~30-60s per video
+                      quality=interactive (default, 15 FPS, warm worker)
+                      quality=final (25 FPS, HQ + optional denoise)
+  Runs fully local, no API key needed
 ```
 
 ### Voice pipeline detail
@@ -225,7 +227,7 @@ USER SPEAKS
 
 ### Known limitations
 
-- wav2lip renders on CPU: ~30–60s per response video (audio plays immediately as fallback)
+- wav2lip on CPU is still latency-heavy; interactive mode is faster than final/HQ mode
 - STT requires mic permission + `SharedArrayBuffer` support in the browser
 - API key set via Settings UI persists only until container restart (no DB storage)
 - `POST /api/sessions/{id}/message` (legacy) and `POST /api/converse/respond` (new) both save messages; scoring reads from DB so should reflect all turns — verify after a full session

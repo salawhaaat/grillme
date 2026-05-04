@@ -4,6 +4,7 @@ import json
 import random
 import uuid
 from pathlib import Path
+from typing import Literal
 
 import httpx
 
@@ -26,6 +27,16 @@ SMALLTALK_CLIPS = [
     "Getting everything ready for you.",
     "One moment please.",
     "Almost ready to begin.",
+]
+
+# Short filler clips played immediately when PTT is released, while LLM+TTS renders.
+# Keeps the avatar active and bridges the ~2-3s latency gap.
+THINKING_CLIPS = [
+    "Mm.",
+    "Right.",
+    "I see.",
+    "Okay.",
+    "Got it.",
 ]
 
 
@@ -67,7 +78,7 @@ class AvatarService:
             async with httpx.AsyncClient(timeout=300.0) as client:
                 res = await client.post(
                     self._wav2lip_url("/generate"),
-                    json={"text": text, "voice": voice},
+                    json={"text": text, "voice": voice, "quality": "interactive"},
                 )
                 res.raise_for_status()
                 video_path.write_bytes(res.content)
@@ -123,7 +134,7 @@ class AvatarService:
                 async with httpx.AsyncClient(timeout=300.0) as client:
                     res = await client.post(
                         self._wav2lip_url("/generate"),
-                        json={"text": phrase, "voice": "en-US-GuyNeural"},
+                        json={"text": phrase, "voice": "en-US-GuyNeural", "quality": "interactive"},
                     )
                     res.raise_for_status()
                     video_path.write_bytes(res.content)
@@ -141,6 +152,46 @@ class AvatarService:
             if video_path.exists():
                 urls.append(f"/api/avatar/video/smalltalk_{i}.mp4")
         return urls
+
+    async def prerender_thinking_clips(self) -> None:
+        """Pre-render short filler clips played while LLM+TTS processes."""
+        if not self._is_wav2lip_enabled():
+            return
+        if all(
+            (self._videos_dir() / f"thinking_{i}.mp4").exists()
+            for i in range(len(THINKING_CLIPS))
+        ):
+            logger.debug("All thinking clips already exist — skipping pre-render")
+            return
+
+        if not await self._wait_for_avatar_service():
+            logger.warning("Skipping thinking clip pre-render — avatar service unavailable")
+            return
+
+        logger.info("Pre-rendering %d thinking clips …", len(THINKING_CLIPS))
+        for i, phrase in enumerate(THINKING_CLIPS):
+            video_path = self._videos_dir() / f"thinking_{i}.mp4"
+            if video_path.exists():
+                continue
+            try:
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    res = await client.post(
+                        self._wav2lip_url("/generate"),
+                        json={"text": phrase, "voice": "en-US-GuyNeural"},
+                    )
+                    res.raise_for_status()
+                    video_path.write_bytes(res.content)
+                    logger.info("Thinking clip %d ready: %s", i, phrase)
+            except Exception as exc:
+                logger.warning("Thinking clip %d failed: %s", i, exc)
+
+    def get_thinking_urls(self) -> list[str]:
+        """Return URLs for all pre-rendered thinking filler clips that exist on disk."""
+        return [
+            f"/api/avatar/video/thinking_{i}.mp4"
+            for i in range(len(THINKING_CLIPS))
+            if (self._videos_dir() / f"thinking_{i}.mp4").exists()
+        ]
 
     # ── Scenario pre-rendering ───────────────────────────────────────────────
 
@@ -196,7 +247,10 @@ class AvatarService:
             _prerender_status["phase"] = f"{phrase['phase']}_{phrase['index']}"
             try:
                 async with httpx.AsyncClient(timeout=300.0) as client:
-                    res = await client.post(self._wav2lip_url("/generate"), json={"text": phrase["text"], "voice": "en-US-GuyNeural"})
+                    res = await client.post(
+                        self._wav2lip_url("/generate"),
+                        json={"text": phrase["text"], "voice": "en-US-GuyNeural", "quality": "interactive"},
+                    )
                     res.raise_for_status()
                     video_path.write_bytes(res.content)
                     logger.info("Scenario clip %s ready (%d bytes)", filename, len(res.content))
@@ -248,7 +302,13 @@ class AvatarService:
 
     # ── Response videos (one per AI turn, rendered in background) ────────────
 
-    def start_response_job(self, text: str, voice: str, persona: str | None = None) -> str | None:
+    def start_response_job(
+        self,
+        text: str,
+        voice: str,
+        persona: str | None = None,
+        quality: Literal["interactive", "final"] = "interactive",
+    ) -> str | None:
         """
         Register a new wav2lip render job. Returns job_id, or None if
         wav2lip is disabled (caller should skip polling).
@@ -263,14 +323,21 @@ class AvatarService:
 
         job_id = uuid.uuid4().hex
         _video_jobs[job_id] = {"status": "pending"}
-        asyncio.create_task(self._render_response(job_id, text, voice, persona))
+        asyncio.create_task(self._render_response(job_id, text, voice, persona, quality))
         return job_id
 
-    async def _render_response(self, job_id: str, text: str, voice: str, persona: str | None = None) -> None:
+    async def _render_response(
+        self,
+        job_id: str,
+        text: str,
+        voice: str,
+        persona: str | None = None,
+        quality: Literal["interactive", "final"] = "interactive",
+    ) -> None:
         """Async task: render a response video and update job store."""
         try:
             async with httpx.AsyncClient(timeout=300.0) as client:
-                body: dict = {"text": text, "voice": voice}
+                body: dict = {"text": text, "voice": voice, "quality": quality}
                 if persona is not None:
                     body["persona"] = persona
                 res = await client.post(
@@ -335,7 +402,7 @@ class AvatarService:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 res = await client.post(
                     self._wav2lip_url("/generate"),
-                    json={"text": text, "voice": voice},
+                    json={"text": text, "voice": voice, "quality": "final"},
                 )
                 if res.status_code == 503:
                     detail = res.json().get("detail", "avatar service not ready")

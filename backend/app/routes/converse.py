@@ -38,7 +38,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.logging import setup_logger
 from app.models.session import InterviewSession
-from app.services import clip_selector
 from app.services.avatar import avatar_service
 from app.services.llm import LLMService, ProviderError, RateLimitError
 from app.services.sentence_splitter import split_sentences
@@ -337,41 +336,6 @@ async def converse_stream_text(
     )
 
 
-# ── Phase determination for clip matching ────────────────────────────────────
-
-
-def _determine_phase(session: InterviewSession, messages: list[dict]) -> str:
-    user_turns = sum(1 for m in messages if m.get("role") == "user")
-    qb = None
-    if session.question_bank:
-        try:
-            qb = json.loads(session.question_bank)
-        except (json.JSONDecodeError, TypeError):
-            pass
-    if qb:
-        warmup_count = len(qb.get("warmup", []))
-        trivia_count = len(qb.get("trivia", []))
-        culture_count = len(qb.get("culture_fit", []))
-        non_coding = warmup_count + trivia_count + culture_count
-        if user_turns == 0:
-            return "intro"
-        elif user_turns <= non_coding:
-            return "behavioral"
-        elif user_turns == non_coding + 1:
-            return "coding_intro"
-        else:
-            return "coding_feedback"
-    else:
-        if user_turns == 0:
-            return "intro"
-        elif user_turns <= 3:
-            return "behavioral"
-        elif user_turns == 4:
-            return "coding_intro"
-        else:
-            return "coding_feedback"
-
-
 # ── Respond endpoint: LLM → save → start wav2lip job ─────────────────────────
 
 
@@ -426,19 +390,8 @@ async def converse_respond(
     except Exception:
         logger.exception("Failed to persist respond messages")
 
-    # Check for pre-rendered clip match before starting live render
-    manifest = avatar_service.get_scenario_manifest()
-    current_phase = _determine_phase(session, messages)
-    clip_match = clip_selector.find_match(response_text, current_phase, manifest.get("clips", []))
-
-    if clip_match:
-        return {
-            "job_id": None,
-            "text": response_text,
-            "video_url": f"/api/avatar/video/{clip_match['path']}",
-            "prerendered": True,
-        }
-
-    # No match — start live wav2lip render
+    # Always render the actual LLM response via wav2lip so video matches chat text.
+    # Pre-rendered scenario clips are intentionally NOT used here — they play scripted
+    # audio that doesn't match response_text, making chat and video show different things.
     job_id = avatar_service.start_response_job(response_text, body.voice, persona=session.persona)
     return {"job_id": job_id, "text": response_text, "prerendered": False}

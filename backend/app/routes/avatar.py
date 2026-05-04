@@ -1,5 +1,6 @@
 import re
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -30,6 +31,12 @@ async def get_video_job(job_id: str) -> dict:
 async def get_smalltalk_clips() -> dict:
     """Return list of pre-rendered smalltalk clip URLs for immediate playback."""
     return {"clips": avatar_service.get_smalltalk_urls()}
+
+
+@router.get("/thinking")
+async def get_thinking_clips() -> dict:
+    """Return list of pre-rendered thinking filler clip URLs for immediate playback."""
+    return {"clips": avatar_service.get_thinking_urls()}
 
 
 @router.get("/scenarios")
@@ -89,6 +96,53 @@ async def create_avatar_speak_video(
         session_id=session.id,
         text=body.text,
     )
+
+
+class RenderTestRequest(BaseModel):
+    text: str
+    voice: str = "en-US-GuyNeural"
+    quality: Literal["interactive", "final"] = "interactive"
+
+    @field_validator("text")
+    @classmethod
+    def text_not_empty(cls, v: str) -> str:
+        val = v.strip()
+        if not val:
+            raise ValueError("text must not be empty")
+        return val
+
+
+@router.post("/render-test")
+async def render_test(body: RenderTestRequest) -> dict:
+    """
+    Kick off a wav2lip render for any text without needing a session.
+    Returns {job_id} immediately. Poll GET /api/avatar/job/{job_id} until done,
+    then play the video_url. Useful for testing the avatar pipeline in isolation.
+    """
+    job_id = avatar_service.start_response_job(body.text, body.voice, quality=body.quality)
+    if job_id is None:
+        raise HTTPException(503, "wav2lip not configured — set AVATAR_PROVIDER=wav2lip")
+    return {"job_id": job_id}
+
+
+@router.get("/videos")
+async def list_videos() -> dict:
+    """List all generated video files in VIDEOS_DIR. Useful for inspection."""
+    videos_dir = Path(settings.videos_dir)
+    if not videos_dir.exists():
+        return {"videos": []}
+    files = sorted(videos_dir.rglob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return {
+        "videos": [
+            {
+                "name": f.name,
+                "path": str(f.relative_to(videos_dir)),
+                "url": f"/api/avatar/video/{f.relative_to(videos_dir)}",
+                "size_kb": round(f.stat().st_size / 1024, 1),
+            }
+            for f in files[:50]  # cap at 50 most recent
+        ]
+    }
 
 
 @router.get("/video/{filename:path}")

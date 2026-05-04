@@ -10,6 +10,7 @@ import ResourcesPage from "@/pages/Resources"
 import SettingsPage from "@/pages/Settings"
 import ProfilePage from "@/pages/Profile"
 import STTTestPage from "@/pages/STTTest"
+import AvatarTestPage from "@/pages/AvatarTest"
 
 export default function App() {
   return (
@@ -26,6 +27,7 @@ export default function App() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/stt-test" element={<STTTestPage />} />
+        <Route path="/avatar-test" element={<AvatarTestPage />} />
       </Routes>
     </BrowserRouter>
   )

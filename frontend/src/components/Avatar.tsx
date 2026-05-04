@@ -76,7 +76,7 @@ export function Avatar({
 
   return (
     <div
-      className="fixed z-50 w-52 rounded-2xl overflow-hidden glass-panel shadow-2xl select-none touch-none"
+      className="fixed z-50 w-40 rounded-2xl overflow-hidden glass-panel shadow-2xl select-none touch-none"
       style={{ left: pos.x, top: pos.y }}
     >
       {/* ── Title bar / drag handle ── */}
