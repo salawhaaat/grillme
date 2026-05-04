@@ -1,8 +1,8 @@
 # grillme
 
-AI mock interview platform. Paste a job description → get a real LeetCode problem matched to the company's interview style → practice with a voice-driven AI interviewer → get scored across six axes.
+AI mock interview platform. Paste a job description → get a LeetCode problem matched to the company's interview style → practice with a voice-driven AI interviewer → get scored across six axes.
 
-**Stack:** FastAPI (Python 3.13) · React 19 + Vite + TypeScript · uv · pnpm · SQLite · edge-tts · Wav2Lip
+**Stack:** FastAPI (Python 3.13) · React 19 + Vite + TypeScript + shadcn/ui · uv · pnpm · SQLite · edge-tts · Wav2Lip · faster-whisper · Silero VAD
 
 ---
 
@@ -29,8 +29,6 @@ cp .env.example .env        # then edit .env with your API key (see below)
 ```
 
 ### 2. Pick a free LLM provider and add the key to `.env`
-
-Open `.env` and set **one** of these:
 
 ```env
 # ── Groq (recommended — free, fast) ─────────────────────────────────
@@ -108,7 +106,7 @@ docker run --rm \
 
 ```bash
 docker compose up
-# → http://localhost:5173
+# → http://localhost:80
 ```
 
 > Without the model file the avatar service returns a 503 and the app falls back to the animated SVG avatar — everything else still works.
@@ -141,7 +139,7 @@ VIDEOS_DIR=/tmp/grillme_videos
 
 | Provider | Sign-up | Notes |
 |----------|---------|-------|
-| [Groq](https://console.groq.com) | Free | Fastest streaming — `llama-3.3-70b-versatile` |
+| [Groq](https://console.groq.com) | Free | Fastest — `llama-3.3-70b-versatile` |
 | [Google AI Studio](https://aistudio.google.com) | Free | `gemini-2.0-flash`, generous daily limits |
 | [OpenRouter](https://openrouter.ai) | Free tier | Many models via one API key |
 
@@ -161,22 +159,53 @@ cd backend && uv run pytest -x -q
 Browser
   Home.tsx          — JD / URL / text input → create session
   Session.tsx       — live interview: editor + voice loop + avatar PIP
-  Scorecard.tsx     — six-axis results
-  Settings.tsx      — voice & LLM preferences
+                      VAD (Silero) → STT (faster-whisper) → LLM → wav2lip video
+  Scorecard.tsx     — six-axis results after finish
+  Settings.tsx      — LLM provider + API key (POST /api/config, runtime override)
+  History.tsx       — past sessions
+  Notes / Profile / Resources / Whiteboard — utility pages
 
-FastAPI
-  /api/sessions/*   — session lifecycle
-  /api/code/*       — run / test code in sandbox
+FastAPI (backend/)
+  /api/sessions/*   — session lifecycle (create, get, message, finish, delete)
+  /api/converse/*   — voice conversation (respond, stream, stream-text)
+  /api/stt          — one-shot STT (POST raw WAV → transcript)
   /api/voice/*      — TTS (edge-tts → MP3)
-  /api/avatar/*     — talking head video generation + serving
+  /api/avatar/*     — wav2lip job management + video serving
+  /api/code/*       — run / test code in sandbox
+  /api/problems/*   — LeetCode scraper + question bank
+  /api/config       — runtime LLM key override (no restart needed)
 
-  Agents: Parse → Problem → Persona → Score → Memory
-  LLMService: OpenAI | Groq | Gemini (swap via .env)
+  Services: LLMService · AvatarService · STT (faster-whisper) · Wav2LipService
+            SentenceSplitter · TTS (edge-tts) · Sandbox · Scraper · QuestionBank
 
-Avatar service (Docker only)
+Avatar service (Docker only — avatar-service/)
   POST /generate    — text → edge-tts audio → wav2lip-onnx → MP4
-  Runs fully local, no API key needed
+  Runs fully local, no API key needed, CPU ~30-60s per video
 ```
+
+### Voice pipeline detail
+
+```
+SESSION LOAD
+  ├─ Poll GET /api/avatar/session/{id}/intro (every 2s)
+  │     └─ ready → play wav2lip MP4 (audio + video)
+  └─ 3-min timeout → TTS fallback (speakText)
+       └─ either path sets openingDone=true → VAD starts
+
+USER SPEAKS
+  ├─ Silero VAD detects end-of-speech → Float32Array
+  ├─ encodeWAV → POST /api/stt → transcript
+  ├─ POST /api/converse/respond → {job_id, text}
+  ├─ Pre-fetch TTS blob as fallback
+  ├─ Poll GET /api/avatar/job/{job_id} until done → play video
+  └─ Timeout fallback → play TTS blob
+```
+
+### nginx (Docker frontend)
+
+- CORS headers for `SharedArrayBuffer` (`COOP: same-origin`, `COEP: credentialless`) — required by Silero VAD WASM
+- Custom `types {}` block: `application/wasm` for VAD `.wasm` files, `application/javascript` for `.mjs`
+- All `/api/*` requests proxied to backend with SSE + WebSocket support
 
 ---
 
@@ -188,8 +217,15 @@ Avatar service (Docker only)
 | M5 | LeetCode URL input | Done |
 | M6 | Curated question bank | Done |
 | M7 | Multi-agent pipeline | Done |
-| M8 | Voice loop + animated avatar | Done |
+| M8 | Voice loop (VAD + STT + TTS) | Done |
 | M9 | Docker Compose deployment | Done |
 | M10 | Wav2Lip local talking head | Done (needs model download) |
 | M11 | PostgreSQL + Alembic | Planned |
 | M12 | Tool use (web search) | Planned |
+
+### Known limitations
+
+- wav2lip renders on CPU: ~30–60s per response video (audio plays immediately as fallback)
+- STT requires mic permission + `SharedArrayBuffer` support in the browser
+- API key set via Settings UI persists only until container restart (no DB storage)
+- `POST /api/sessions/{id}/message` (legacy) and `POST /api/converse/respond` (new) both save messages; scoring reads from DB so should reflect all turns — verify after a full session

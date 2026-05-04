@@ -1,16 +1,13 @@
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import Editor from "@monaco-editor/react"
 import { api, type Difficulty, type SessionSource } from "@/lib/api/client"
 import { cn } from "@/lib/utils"
 import { Sidebar } from "@/components/Sidebar"
 import { DIFFICULTY_PICKER_META } from "@/lib/constants/difficulty"
 import * as pdfjsLib from "pdfjs-dist"
+import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url"
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.min.mjs",
-  import.meta.url,
-).toString()
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl
 
 function useDraggable(initialPos: { x: number; y: number }) {
   const [pos, setPos] = useState(initialPos)
@@ -50,11 +47,6 @@ export default function Home() {
   const [source, setSource] = useState<SessionSource>("jd")
   const [leetcodeUrl, setLeetcodeUrl] = useState("")
   const [pastProblemText, setPastProblemText] = useState("")
-  const [formCollapsed, setFormCollapsed] = useState(false)
-  const [problemStatement, setProblemStatement] = useState("")
-  const [starterCode, setStarterCode] = useState("")
-  const [sessionId, setSessionId] = useState<number | null>(null)
-  const [openingMessage, setOpeningMessage] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [fileDragging, setFileDragging] = useState(false)
@@ -63,6 +55,48 @@ export default function Home() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const cvInputRef = useRef<HTMLInputElement>(null)
   const pip = useDraggable({ x: window.innerWidth - 320, y: 80 })
+
+  // Pre-render status polling — show setup screen until clips are ready
+  // isSettingUp: true until we confirm clips exist on disk (regardless of running flag)
+  const [prerenderStatus, setPrerenderStatus] = useState<{ running: boolean; total: number; done: number } | null>(null)
+  const [isSettingUp, setIsSettingUp] = useState(true)
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const status = await api.getPrerenderStatus()
+        if (cancelled) return
+
+        // wav2lip disabled — don't block UI
+        if (!status.running && status.total === 0) {
+          setIsSettingUp(false)
+          return
+        }
+
+        // Check manifest first — if clips already exist and we're not rendering, dismiss silently
+        try {
+          const manifest = await api.getScenarioManifest()
+          if (manifest.clips.length > 0 && !status.running) {
+            setIsSettingUp(false)
+            return
+          }
+        } catch { /* ignore */ }
+
+        // Only show the overlay if we're actively rendering
+        if (status.running) {
+          setPrerenderStatus(status)
+          setTimeout(poll, 2000)
+        } else {
+          // Not running, no clips yet — backend task hasn't started (race), retry silently
+          setTimeout(poll, 2000)
+        }
+      } catch {
+        if (!cancelled) setTimeout(poll, 3000)
+      }
+    }
+    void poll()
+    return () => { cancelled = true }
+  }, [])
 
   async function extractPdfText(file: File): Promise<string> {
     const bytes = await file.arrayBuffer()
@@ -111,8 +145,9 @@ export default function Home() {
       }
       setCvText(text)
       setError(null)
-    } catch {
-      setError("Failed to read CV file.")
+    } catch (err) {
+      console.error("PDF parse error:", err)
+      setError(`Failed to read PDF: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -132,27 +167,19 @@ export default function Home() {
         difficulty,
         source === "jd" ? cvText.trim() || undefined : undefined,
       )
-      setSessionId(res.session_id)
-      setOpeningMessage(res.opening_message)
-      setProblemStatement(res.problem.statement)
-      setStarterCode(res.starter_code)
-      setFormCollapsed(true)
+      // Navigate immediately — Session page polls for problem readiness
+      navigate(`/session/${res.session_id}`, {
+        state: {
+          openingMessage: res.opening_message,
+          problemStatement: res.problem?.statement ?? null,
+          starterCode: res.starter_code ?? null,
+        },
+      })
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong")
     } finally {
       setLoading(false)
     }
-  }
-
-  function handleStartInterview() {
-    if (!sessionId) return
-    navigate(`/session/${sessionId}`, {
-      state: {
-        openingMessage,
-        problemStatement,
-        starterCode,
-      },
-    })
   }
 
   function handleDragOver(e: React.DragEvent) {
@@ -189,7 +216,7 @@ export default function Home() {
     const file = e.target.files?.[0]
     if (!file) return
     await readCvFile(file)
-    e.currentTarget.value = ""
+    if (e.currentTarget) e.currentTarget.value = ""
   }
 
   function handleCvDragOver(e: React.DragEvent) {
@@ -224,38 +251,63 @@ export default function Home() {
 
       <div className="flex flex-1 overflow-hidden">
         <Sidebar activePage="home" />
+
+        {/* Full-screen setup overlay — blocks UI until pre-rendering is done */}
+        {isSettingUp && prerenderStatus && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-background">
+            <div className="flex flex-col items-center gap-6 max-w-md text-center px-6">
+              <img src="/logo.jpg" alt="grillme" className="h-16 w-16 rounded-full" />
+              <h2 className="text-xl font-bold text-on-surface">Setting up your interview environment</h2>
+              <p className="text-sm text-on-surface-variant leading-relaxed">
+                {prerenderStatus.total > 0
+                  ? `First-time setup — pre-rendering ${prerenderStatus.total} video clips for instant playback. This only happens once.`
+                  : "Starting up the avatar service, please wait…"}
+              </p>
+              {prerenderStatus.total > 0 && (
+                <div className="w-full space-y-2">
+                  <div className="w-full h-2 bg-surface-container-highest rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary rounded-full transition-all duration-700 ease-out"
+                      style={{ width: `${(prerenderStatus.done / prerenderStatus.total) * 100}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-on-surface-variant">
+                    {prerenderStatus.done} / {prerenderStatus.total} clips ready
+                  </p>
+                </div>
+              )}
+              <div className="flex items-center gap-2 text-xs text-outline">
+                <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                {prerenderStatus.done < prerenderStatus.total
+                  ? `Rendering clip ${prerenderStatus.done + 1} of ${prerenderStatus.total}…`
+                  : `All ${prerenderStatus.total} clips rendered — finishing up…`}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-1 overflow-hidden">
           <div className="w-1/2 border-r border-border bg-surface-container-low flex flex-col overflow-hidden">
             {/* Accordion header */}
             <div className="flex items-center justify-between px-4 py-2 bg-surface-container-low border-b border-border shrink-0">
-              <button
-                onClick={() => setFormCollapsed((f) => !f)}
-                className="flex items-center gap-2"
-              >
-                <span className="material-symbols-outlined text-primary text-base" style={{ fontVariationSettings: "'FILL' 1" }}>
-                  {formCollapsed ? "chevron_right" : "expand_more"}
-                </span>
+              <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-on-surface uppercase tracking-widest">Interview Input</span>
-              </button>
-              {!formCollapsed && (
-                <div className="inline-flex rounded-lg border border-outline-variant/30 bg-surface-container-lowest p-1 gap-1">
-                  <button onClick={() => setSource("jd")} className={cn("px-3 py-1 text-xs rounded-md transition-colors", source === "jd" ? "bg-primary/20 text-primary" : "text-on-surface-variant hover:text-on-surface")}>
-                    Job Description
-                  </button>
-                  <button onClick={() => setSource("url")} className={cn("px-3 py-1 text-xs rounded-md transition-colors", source === "url" ? "bg-primary/20 text-primary" : "text-on-surface-variant hover:text-on-surface")}>
-                    LeetCode Link
-                  </button>
-                  <button onClick={() => setSource("text")} className={cn("px-3 py-1 text-xs rounded-md transition-colors", source === "text" ? "bg-primary/20 text-primary" : "text-on-surface-variant hover:text-on-surface")}>
-                    Past Problem
-                  </button>
-                </div>
-              )}
+              </div>
+              <div className="inline-flex rounded-lg border border-outline-variant/30 bg-surface-container-lowest p-1 gap-1">
+                <button onClick={() => setSource("jd")} className={cn("px-3 py-1 text-xs rounded-md transition-colors", source === "jd" ? "bg-primary/20 text-primary" : "text-on-surface-variant hover:text-on-surface")}>
+                  Job Description
+                </button>
+                <button onClick={() => setSource("url")} className={cn("px-3 py-1 text-xs rounded-md transition-colors", source === "url" ? "bg-primary/20 text-primary" : "text-on-surface-variant hover:text-on-surface")}>
+                  LeetCode Link
+                </button>
+                <button onClick={() => setSource("text")} className={cn("px-3 py-1 text-xs rounded-md transition-colors", source === "text" ? "bg-primary/20 text-primary" : "text-on-surface-variant hover:text-on-surface")}>
+                  Past Problem
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto no-scrollbar flex flex-col min-h-0">
-              {/* Form — hidden when collapsed */}
-              {!formCollapsed && (
-                <div className="p-4 flex flex-col gap-3 shrink-0">
+              <div className="p-4 flex flex-col gap-3 shrink-0">
                   {source === "jd" ? (
                     <div className="flex flex-col gap-3">
                       <div className="flex flex-col gap-1.5">
@@ -351,31 +403,9 @@ export default function Home() {
                     onClick={handleAnalyzeJD}
                     disabled={loading || (source === "jd" && !jdText.trim()) || (source === "url" && !leetcodeUrl.trim()) || (source === "text" && !pastProblemText.trim())}
                   >
-                    {loading ? <><span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>Building problem…</> : <><span className="material-symbols-outlined text-sm">psychology</span>Generate Problem</>}
+                    {loading ? <><span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>Building problem…</> : <><span className="material-symbols-outlined text-sm">psychology</span>Start Interview</>}
                   </button>
                 </div>
-              )}
-
-              {/* Problem — shown below form once generated */}
-              {problemStatement && (
-                <div className={cn("p-4 flex flex-col gap-3", !formCollapsed && "border-t border-border")}>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-base font-bold text-on-surface">Coding Problem</h2>
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-primary/10 text-primary border border-primary/30">{difficulty}</span>
-                  </div>
-                  <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-4 overflow-y-auto no-scrollbar" style={{ maxHeight: "40vh" }}>
-                    <p className="text-sm text-on-surface whitespace-pre-wrap leading-relaxed">{problemStatement}</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={() => setFormCollapsed(false)} className="flex-1 py-2 text-xs font-semibold rounded-xl border border-outline-variant/30 text-on-surface-variant hover:bg-surface-container-high transition-colors">
-                      Edit Inputs
-                    </button>
-                    <button onClick={handleStartInterview} disabled={!sessionId} className="flex-1 py-2 text-xs font-bold rounded-xl shimmer-gradient text-on-primary hover:opacity-90 transition-opacity disabled:opacity-40">
-                      Start Interview
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 
@@ -396,34 +426,17 @@ export default function Home() {
             </div>
 
             <div className="flex-1 overflow-hidden">
-              {starterCode ? (
-                <Editor
-                  height="100%"
-                  defaultLanguage="python"
-                  theme="vs-dark"
-                  value={starterCode}
-                  options={{
-                    readOnly: true,
-                    fontSize: 13,
-                    minimap: { enabled: false },
-                    lineNumbers: "on",
-                    scrollBeyondLastLine: false,
-                    automaticLayout: true,
-                  }}
-                />
-              ) : (
-                <div className="flex font-mono text-[13px] h-full">
-                  <div className="w-10 bg-surface-container-lowest text-outline/30 flex flex-col items-end pr-3 py-4 select-none text-xs shrink-0">
-                    {Array.from({ length: 10 }, (_, i) => <span key={i} className="leading-[1.75rem]">{i + 1}</span>)}
-                  </div>
-                  <div className="flex-1 p-4 overflow-y-auto no-scrollbar text-sm leading-[1.75rem]">
-                    <div className="text-outline/30 italic text-xs mb-3"># Code editor preview</div>
-                    <div><span className="text-primary/50">class</span><span className="text-on-surface/30"> Solution:</span></div>
-                    <div className="pl-8"><span className="text-primary/50">def</span><span className="text-on-surface/30"> solve(self) -&gt; None:</span></div>
-                    <div className="pl-16 text-outline/25"># problem will appear after JD analysis</div>
-                  </div>
+              <div className="flex font-mono text-[13px] h-full">
+                <div className="w-10 bg-surface-container-lowest text-outline/30 flex flex-col items-end pr-3 py-4 select-none text-xs shrink-0">
+                  {Array.from({ length: 10 }, (_, i) => <span key={i} className="leading-[1.75rem]">{i + 1}</span>)}
                 </div>
-              )}
+                <div className="flex-1 p-4 overflow-y-auto no-scrollbar text-sm leading-[1.75rem]">
+                  <div className="text-outline/30 italic text-xs mb-3"># Code editor preview</div>
+                  <div><span className="text-primary/50">class</span><span className="text-on-surface/30"> Solution:</span></div>
+                  <div className="pl-8"><span className="text-primary/50">def</span><span className="text-on-surface/30"> solve(self) -&gt; None:</span></div>
+                  <div className="pl-16 text-outline/25"># problem will appear in session</div>
+                </div>
+              </div>
             </div>
 
             <div className="h-[24%] border-t border-border flex flex-col shrink-0">
@@ -463,7 +476,7 @@ export default function Home() {
               <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-surface-container to-surface-container-highest">
                 <span
                   className="material-symbols-outlined text-7xl pip-idle"
-                  style={{ fontVariationSettings: "'FILL' 1", color: problemStatement ? "rgba(224,90,58,0.5)" : "rgba(155,156,158,0.2)" }}
+                  style={{ fontVariationSettings: "'FILL' 1", color: "rgba(155,156,158,0.2)" }}
                 >
                   face
                 </span>

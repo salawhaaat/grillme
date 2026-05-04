@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import UTC, datetime
 from typing import Literal
@@ -25,6 +26,11 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 llm = LLMService()
 orchestrator = Orchestrator(llm=llm)
 scraper = ScraperService()
+
+
+def _infer_voice(_persona: str | None = None) -> str:
+    return "en-US-GuyNeural"
+
 
 DIFFICULTY_INSTRUCTIONS: dict[str, str] = {
     "rare": (
@@ -67,7 +73,8 @@ def _apply_usage(session: InterviewSession, prompt_tokens: int, completion_token
 def _cv_context(cv_text: str | None) -> str:
     if not cv_text:
         return ""
-    return cv_text[:3000]
+    # Keep CV context short — it's included in every LLM call
+    return cv_text[:500]
 
 
 def _build_system_prompt(session: InterviewSession, messages: list[dict] | None = None) -> str:
@@ -77,13 +84,24 @@ def _build_system_prompt(session: InterviewSession, messages: list[dict] | None 
 
     base = (
         f"{session.persona}\n\n"
+        "INTERVIEWER PERSONALITY: You are Elon Musk conducting this interview. "
+        "Be direct, slightly impatient, and think from first principles. "
+        "Cut through fluff — ask sharp, specific questions. "
+        "If an answer is vague, push back immediately. "
+        "Keep responses extremely concise — you value your time.\n\n"
         f"You are conducting a technical mock interview for {session.role} at "
         f"{session.company} ({session.level} level).\n\n"
-        "Rules: ask ONE question at a time, follow up on incomplete answers, "
+        "CRITICAL OUTPUT RULES (follow these before anything else):\n"
+        "- Always speak in FIRST PERSON as the interviewer. NEVER write '[Name] says:' or any narration.\n"
+        "- Your output is direct speech — start with 'I', 'Let's', 'Tell me', 'Great', etc.\n"
+        "- NEVER prefix your reply with your own name or any third-person narration.\n\n"
+        "Interview rules: ask ONE question at a time, follow up on incomplete answers, "
         "stay in character throughout.\n"
         "Never provide a full final solution or complete production-ready code, even if asked directly. "
         "If asked for the solution, refuse briefly, then provide one hint and one guiding question.\n"
-        "Keep each reply short (1-3 sentences) unless the candidate explicitly asks for deep detail.\n\n"
+        "Keep each reply to 1-2 sentences maximum, under 30 words. "
+        "This is a real-time voice conversation — be concise, natural, and direct like a real interviewer. "
+        "Never write paragraphs or lists.\n\n"
         f"{difficulty_block}\n\n"
     )
     if session.cv_text:
@@ -91,17 +109,26 @@ def _build_system_prompt(session: InterviewSession, messages: list[dict] | None 
             "Candidate CV context (use only these facts for personalized follow-ups):\n"
             f"{_cv_context(session.cv_text)}\n\n"
         )
+    # Only include full problem during coding phase — saves ~500 tokens on every behavioral turn
     if session.full_problem:
-        base += (
-            "\n\nFULL PROBLEM (the candidate sees a CUT version without examples/constraints):\n"
-            f"{session.full_problem}\n\n"
-            f"The candidate has starter code:\n```python\n{session.starter_code or ''}\n```\n\n"
-            "RULES FOR THIS INTERVIEW:\n"
-            "- Only reveal examples, constraints, or edge cases when the candidate ASKS about them.\n"
-            "- If they don't ask and start coding, silently note it (it will affect their curiosity score).\n"
-            "- React to their code and test results when they share them.\n"
-            "- Near the end (after they solve or give up), wrap with 'That's all from me — do you have any questions for me?'\n"
-        )
+        qb_for_phase = json.loads(session.question_bank) if session.question_bank else None
+        if qb_for_phase:
+            non_coding = (
+                len(qb_for_phase.get("warmup", [])) +
+                len(qb_for_phase.get("trivia", [])) +
+                len(qb_for_phase.get("culture_fit", []))
+            )
+            include_problem = user_turn_count >= non_coding
+        else:
+            include_problem = True  # no question bank — always include
+        if include_problem:
+            base += (
+                "\n\nFULL PROBLEM (the candidate sees a CUT version without examples/constraints):\n"
+                f"{session.full_problem[:800]}\n\n"
+                f"Starter code:\n```python\n{session.starter_code or ''}\n```\n\n"
+                "RULES: Only reveal examples/constraints when asked. React to candidate's code.\n"
+                "Near the end, wrap with 'That's all from me — do you have any questions?'\n"
+            )
 
     qb_data = json.loads(session.question_bank) if session.question_bank else None
     warmup_questions = qb_data.get("warmup", []) if qb_data else []
@@ -363,13 +390,12 @@ async def create_from_jd(
         {
             "role": "system",
             "content": (
-                f"{persona}\n\n"
-                f"You are interviewing a candidate for {parsed.get('role')} at {parsed.get('company')} "
-                f"({parsed.get('level')} level). "
-                f"{'Candidate CV context:\\n' + _cv_context(body.cv_text) + '\\n\\n' if body.cv_text else ''}"
-                f"Question bank warmup starts with: {question_bank.get('warmup', [])[:2]}. "
-                "Give a one-sentence in-character introduction as yourself, then ask ONE warmup question "
-                "grounded in the candidate's CV/background. Do NOT present the coding problem yet."
+                "You are Elon Musk opening a technical interview. "
+                "Your ONLY job right now is to introduce yourself and ask the candidate to introduce themselves. "
+                "Output exactly ONE sentence, under 15 words. "
+                "REQUIRED format: start with 'I'm Elon' then ask them to introduce themselves. "
+                "Example: 'I'm Elon — give me the thirty-second version of who you are.' "
+                "DO NOT ask any technical question. ONLY ask for self-introduction."
             ),
         },
         {"role": "user", "content": "Begin."},
@@ -421,42 +447,65 @@ async def create_session(
     )
     user_weaknesses = [w.area for w in weakness_rows.scalars().all()]
 
-    try:
-        result = await orchestrator.run_interview_pipeline(
-            source=body.source,
-            content=body.content,
-            difficulty=body.difficulty,
-            user_weaknesses=user_weaknesses,
-        )
-    except Exception as e:
-        logger.error("Interview pipeline failed: %s", e)
-        raise HTTPException(503, f"Pipeline failed: {e}") from e
+    # Run interview pipeline and JD pipeline concurrently when source is "jd"
+    # This cuts session creation from ~6 sequential LLM calls to ~3 parallel ones
+    if body.source == "jd":
+        try:
+            pipeline_result, jd_result = await asyncio.gather(
+                orchestrator.run_interview_pipeline(
+                    source=body.source,
+                    content=body.content,
+                    difficulty=body.difficulty,
+                    user_weaknesses=user_weaknesses,
+                ),
+                orchestrator.run_jd_pipeline(
+                    body.content,
+                    user_weaknesses=user_weaknesses,
+                    cv_text=body.cv_text,
+                ),
+                return_exceptions=True,
+            )
+            if isinstance(pipeline_result, Exception):
+                raise pipeline_result
+            result = pipeline_result
+            question_bank_payload = (
+                jd_result.persona.question_bank.model_dump()
+                if not isinstance(jd_result, Exception)
+                else None
+            )
+        except Exception as e:
+            logger.exception("Interview pipeline failed")
+            raise HTTPException(503, f"Pipeline failed: {e}") from e
+    else:
+        try:
+            result = await orchestrator.run_interview_pipeline(
+                source=body.source,
+                content=body.content,
+                difficulty=body.difficulty,
+                user_weaknesses=user_weaknesses,
+            )
+        except Exception as e:
+            logger.exception("Interview pipeline failed")
+            raise HTTPException(503, f"Pipeline failed: {e}") from e
+        question_bank_payload = None
 
     problem = result.problem
     persona = result.persona
     parsed = result.parsed_jd
-
-    question_bank_payload = None
-    if body.source == "jd":
-        try:
-            jd_pipeline = await orchestrator.run_jd_pipeline(
-                body.content,
-                user_weaknesses=user_weaknesses,
-                cv_text=body.cv_text,
-            )
-            question_bank_payload = jd_pipeline.persona.question_bank.model_dump()
-        except Exception as e:
-            logger.warning("Question bank generation fallback failed: %s", e)
+    raw_problem = result.raw_problem  # {title, difficulty, description} — no LLM yet
 
     opening_messages = [
         {
             "role": "system",
             "content": (
-                f"{persona.persona_text}\n\n"
-                f"{'Candidate CV context:\\n' + _cv_context(body.cv_text) + '\\n\\n' if body.cv_text else ''}"
-                f"{'Question bank warmup starts with: ' + str(question_bank_payload.get('warmup', [])[:2]) + '. ' if question_bank_payload else ''}"
-                "Start with character: one-sentence introduction as interviewer, then ask ONE warmup question. "
-                "If candidate CV/background is known, use that context. Do NOT present the coding problem yet."
+                "You are Elon Musk opening a technical interview. "
+                "Your ONLY job right now is to introduce yourself and ask the candidate to introduce themselves. "
+                "Output exactly ONE sentence, under 15 words. "
+                "REQUIRED format: start with 'I'm Elon' then ask them to introduce themselves. "
+                "Example outputs: "
+                "'I'm Elon — give me the thirty-second version of who you are.' "
+                "'I'm Elon. Tell me what you've been working on.' "
+                "DO NOT ask any technical question. DO NOT mention the job. ONLY ask for self-introduction."
             ),
         },
         {
@@ -478,14 +527,8 @@ async def create_session(
         oa_platform=persona.oa_platform,
         cv_text=body.cv_text,
         question_bank=json.dumps(question_bank_payload) if question_bank_payload else None,
-        problem_statement=problem.problem_statement,
-        full_problem=problem.full_problem,
-        starter_code=problem.starter_code,
-        test_cases=json.dumps({
-            "method_name": problem.method_name,
-            "test_cases": problem.test_cases,
-        }),
-        method_name=problem.method_name,
+        # Problem fields are empty until background task completes
+        full_problem=raw_problem.get("description", ""),
         messages=json.dumps([{"role": "assistant", "content": opening}]),
     )
     _apply_usage(
@@ -497,6 +540,10 @@ async def create_session(
     await db.commit()
     await db.refresh(session)
 
+    # Fire background task to paraphrase problem + generate starter code + tests
+    # This runs while the user does intro/behavioral — 2 LLM calls in parallel
+    asyncio.create_task(_process_problem_background(session.id, raw_problem))
+
     return {
         "session_id": session.id,
         "source": body.source,
@@ -505,13 +552,70 @@ async def create_session(
         "role": session.role,
         "level": session.level,
         "problem": {
-            "title": problem.title,
-            "difficulty": problem.difficulty,
-            "statement": problem.problem_statement,
-            "method_name": problem.method_name,
+            "title": raw_problem.get("title", ""),
+            "difficulty": raw_problem.get("difficulty", ""),
+            "statement": None,   # not ready yet — frontend polls /problem-status
+            "method_name": None,
         },
-        "starter_code": problem.starter_code,
+        "starter_code": None,    # not ready yet
         "opening_message": opening,
+        "problem_ready": False,
+    }
+
+
+# ── Background problem processing ─────────────────────────────────────────────
+
+async def _process_problem_background(session_id: int, raw_problem: dict) -> None:
+    """
+    Background task: paraphrase problem + generate starter code + tests.
+    Runs while the user does intro/behavioral — 2 LLM calls in parallel.
+    Writes results to DB when done.
+    """
+    from app.core.database import SessionLocal
+    try:
+        problem = await orchestrator.problem_agent.process_raw(raw_problem)
+        async with SessionLocal() as db:
+            session = await db.get(InterviewSession, session_id)
+            if session:
+                session.problem_statement = problem.problem_statement
+                session.full_problem = problem.full_problem
+                session.starter_code = problem.starter_code
+                session.test_cases = json.dumps({
+                    "method_name": problem.method_name,
+                    "test_cases": problem.test_cases,
+                })
+                session.method_name = problem.method_name
+                await db.commit()
+                logger.info("Problem ready for session %d: %s", session_id, problem.title)
+    except Exception as exc:
+        logger.error("Background problem processing failed for session %d: %s", session_id, exc)
+        async with SessionLocal() as db:
+            session = await db.get(InterviewSession, session_id)
+            if session and not session.problem_statement:
+                session.problem_statement = (
+                    "⚠️ Problem generation failed. Please describe the problem you'd like to solve, "
+                    "or ask your interviewer to suggest one."
+                )
+                session.starter_code = "# Write your solution here\ndef solution():\n    pass\n"
+                await db.commit()
+
+
+@router.get("/{session_id}/problem-status")
+async def get_problem_status(
+    session_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Poll this until problem_ready=true, then show the coding panel."""
+    session = await db.get(InterviewSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    ready = bool(session.problem_statement and session.starter_code)
+    return {
+        "problem_ready": ready,
+        "problem_statement": session.problem_statement if ready else None,
+        "starter_code": session.starter_code if ready else None,
+        "test_cases": json.loads(session.test_cases) if ready and session.test_cases else None,
+        "method_name": session.method_name if ready else None,
     }
 
 
@@ -676,10 +780,12 @@ async def create_from_problem(
         {
             "role": "system",
             "content": (
-                f"{persona}\n\n"
-                "Start in character with a brief self-introduction, then ask ONE warmup question "
-                "about the candidate's past project or approach to problem-solving. "
-                "Do NOT present the coding problem yet."
+                "You are Elon Musk opening a technical interview. "
+                "Your ONLY job right now is to introduce yourself and ask the candidate to introduce themselves. "
+                "Output exactly ONE sentence, under 15 words. "
+                "REQUIRED format: start with 'I'm Elon' then ask them to introduce themselves. "
+                "Example: 'I'm Elon — give me the thirty-second version of who you are.' "
+                "DO NOT ask any technical question. ONLY ask for self-introduction."
             ),
         },
         {"role": "user", "content": "Begin."},

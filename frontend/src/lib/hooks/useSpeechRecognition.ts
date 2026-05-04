@@ -32,11 +32,14 @@ declare global {
 
 export function useSpeechRecognition() {
   const [transcript, setTranscript] = useState("")
+  // isListening stays true across the brief browser-enforced restart gap so the UI
+  // doesn't flicker. It only becomes false when stop() is explicitly called.
   const [isListening, setIsListening] = useState(false)
+
   const recognitionRef = useRef<RecognitionLike | null>(null)
   const finalRef = useRef("")
-  const startedRef = useRef(false)
-  const desiredListeningRef = useRef(false)
+  const startedRef = useRef(false)          // recognition.start() has been called and onstart fired
+  const desiredRef = useRef(false)          // caller wants listening to be active
   const restartTimerRef = useRef<number | null>(null)
 
   const Recognition = useMemo(
@@ -47,14 +50,15 @@ export function useSpeechRecognition() {
 
   useEffect(() => {
     if (!Recognition) return
+
     const recognition = new Recognition()
-    recognition.continuous = true
+    recognition.continuous = false   // let each utterance end naturally; we restart manually
     recognition.interimResults = true
     recognition.lang = "en-US"
 
     recognition.onstart = () => {
       startedRef.current = true
-      setIsListening(true)
+      // Don't set isListening here — we set it in start() immediately so there's no gap
     }
 
     recognition.onresult = (event) => {
@@ -62,7 +66,7 @@ export function useSpeechRecognition() {
       for (let i = 0; i < event.results.length; i += 1) {
         const chunk = event.results[i][0]?.transcript ?? ""
         if (event.results[i].isFinal) {
-          finalRef.current += chunk
+          finalRef.current += chunk + " "
         } else {
           interim += chunk
         }
@@ -72,76 +76,98 @@ export function useSpeechRecognition() {
 
     recognition.onerror = (event) => {
       startedRef.current = false
-      setIsListening(false)
       const code = event?.error ?? ""
-      const shouldRetry = !["not-allowed", "service-not-allowed", "audio-capture"].includes(code)
-      if (!shouldRetry) {
-        desiredListeningRef.current = false
+      // Permanent errors — user denied mic or no hardware
+      if (["not-allowed", "service-not-allowed", "audio-capture"].includes(code)) {
+        desiredRef.current = false
+        setIsListening(false)
         return
       }
-      if (desiredListeningRef.current) {
-        if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current)
-        restartTimerRef.current = window.setTimeout(() => {
-          if (!recognitionRef.current || startedRef.current || !desiredListeningRef.current) return
-          try {
-            recognitionRef.current.start()
-          } catch { /* ignore */ }
-        }, 350)
+      // no-speech is not an error — just restart quietly
+      if (desiredRef.current) {
+        scheduleRestart(300)
       }
     }
 
     recognition.onend = () => {
       startedRef.current = false
-      setIsListening(false)
+      // Snapshot final transcript when a recognition session ends
       setTranscript(finalRef.current.trim())
-      if (!desiredListeningRef.current) return
-      if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current)
-      restartTimerRef.current = window.setTimeout(() => {
-        if (!recognitionRef.current || startedRef.current || !desiredListeningRef.current) return
-        try {
-          recognition.start()
-        } catch { /* ignore */ }
-      }, 250)
+      // Restart immediately if still desired — keep isListening=true throughout
+      if (desiredRef.current) {
+        scheduleRestart(150)
+      } else {
+        setIsListening(false)
+      }
     }
 
     recognitionRef.current = recognition
-    return () => {
-      desiredListeningRef.current = false
-      if (restartTimerRef.current) {
-        window.clearTimeout(restartTimerRef.current)
-        restartTimerRef.current = null
-      }
-      recognition.stop()
-      recognitionRef.current = null
-    }
-  }, [Recognition])
 
-  const start = useCallback(() => {
-    desiredListeningRef.current = true
-    if (!recognitionRef.current) return
-    if (startedRef.current) return
-    finalRef.current = ""
-    setTranscript("")
-    if (restartTimerRef.current) {
+    return () => {
+      desiredRef.current = false
+      clearRestartTimer()
+      try { recognition.stop() } catch { /* ignore */ }
+      recognitionRef.current = null
+      startedRef.current = false
+    }
+  }, [Recognition]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function clearRestartTimer() {
+    if (restartTimerRef.current !== null) {
       window.clearTimeout(restartTimerRef.current)
       restartTimerRef.current = null
     }
+  }
+
+  function scheduleRestart(delay: number) {
+    clearRestartTimer()
+    restartTimerRef.current = window.setTimeout(() => {
+      restartTimerRef.current = null
+      if (!recognitionRef.current || startedRef.current || !desiredRef.current) return
+      try {
+        recognitionRef.current.start()
+      } catch { /* ignore — already started */ }
+    }, delay)
+  }
+
+  const start = useCallback(() => {
+    if (desiredRef.current && (startedRef.current || restartTimerRef.current !== null)) {
+      // Already listening or about to — nothing to do
+      return
+    }
+    const fresh = !desiredRef.current
+    desiredRef.current = true
+    setIsListening(true)
+
+    if (fresh) {
+      // New listening session — clear accumulated transcript
+      finalRef.current = ""
+      setTranscript("")
+    }
+
+    clearRestartTimer()
+    if (!recognitionRef.current || startedRef.current) return
     try {
       recognitionRef.current.start()
     } catch { /* ignore */ }
   }, [])
 
   const stop = useCallback(() => {
-    desiredListeningRef.current = false
-    if (restartTimerRef.current) {
-      window.clearTimeout(restartTimerRef.current)
-      restartTimerRef.current = null
-    }
+    desiredRef.current = false
+    clearRestartTimer()
+    setIsListening(false)
+    finalRef.current = ""
+    setTranscript("")
     if (!recognitionRef.current || !startedRef.current) return
     try {
       recognitionRef.current.stop()
     } catch { /* ignore */ }
   }, [])
 
-  return { transcript, isListening, start, stop, isSupported }
+  const resetTranscript = useCallback(() => {
+    finalRef.current = ""
+    setTranscript("")
+  }, [])
+
+  return { transcript, isListening, start, stop, resetTranscript, isSupported }
 }

@@ -42,15 +42,6 @@ export default function FeedbackPage() {
       .finally(() => setLoading(false))
   }, [sessionId])
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center gap-3 text-outline">
-        <span className="material-symbols-outlined animate-spin">progress_activity</span>
-        Generating feedback…
-      </div>
-    )
-  }
-
   const userMessages = useMemo(
     () => (session?.messages ?? []).filter((m) => m.role === "user"),
     [session?.messages],
@@ -59,6 +50,15 @@ export default function FeedbackPage() {
     () => (session?.messages ?? []).filter((m) => m.role === "assistant"),
     [session?.messages],
   )
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center gap-3 text-outline">
+        <span className="material-symbols-outlined animate-spin">progress_activity</span>
+        Generating feedback…
+      </div>
+    )
+  }
 
   if (error || !session || !scorecard) {
     return (

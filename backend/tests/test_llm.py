@@ -85,7 +85,7 @@ async def test_raises_without_openai_key():
         s.llm_provider = "openai"
         s.openai_api_key = ""
 
-        with pytest.raises(ValueError, match="OpenAI API key"):
+        with pytest.raises(ValueError, match="API key configured for 'openai'"):
             await collect(LLMService().stream_chat(MESSAGES))
 
 

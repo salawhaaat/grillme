@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GrillMe Audio Pipeline Test</title>
+  <style>
+    body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 20px; }
+    h2 { color: #e0593a; margin-top: 30px; }
+    button { padding: 8px 16px; margin: 4px; border: 1px solid #555; background: #2a2a3e; color: #e0e0e0; cursor: pointer; border-radius: 4px; }
+    button:hover { background: #3a3a4e; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .ok { color: #4caf50; } .err { color: #f44336; } .warn { color: #ff9800; }
+    #log { white-space: pre-wrap; font-size: 12px; line-height: 1.6; max-height: 400px; overflow-y: auto; background: #0a0a15; padding: 10px; border-radius: 4px; }
+    #rms-bar { width: 300px; height: 20px; background: #333; border-radius: 4px; overflow: hidden; display: inline-block; vertical-align: middle; }
+    #rms-fill { height: 100%; background: #e0593a; width: 0; transition: width 50ms; }
+    #rms-val { display: inline-block; width: 60px; text-align: right; }
+  </style>
+</head>
+<body>
+  <h1>Audio Pipeline Test</h1>
+  <p>Tests each component independently. Open browser console (F12) for details.</p>
+
+  <h2>1. ONNX / VAD Model</h2>
+  <button id="btn-onnx">Test ONNX Load</button>
+  <button id="btn-vad">Test VAD (mic 5s)</button>
+
+  <h2>2. Web Audio AnalyserNode + RMS</h2>
+  <p>Plays a test tone through AudioContext &rarr; GainNode &rarr; AnalyserNode &rarr; speakers.</p>
+  <button id="btn-tone">Play 440Hz Tone (2s)</button>
+  <button id="btn-stop-tone">Stop</button>
+  <br><br>
+  RMS: <span id="rms-val">0.000</span> <div id="rms-bar"><div id="rms-fill"></div></div>
+
+  <h2>3. TTS Audio Decode</h2>
+  <p>Fetches opening message TTS from backend, decodes with decodeAudioData, plays through AnalyserNode.</p>
+  <label>Session ID: <input id="session-id" type="number" value="1" style="width:60px; background:#2a2a3e; color:#e0e0e0; border:1px solid #555; padding:4px;"></label>
+  <button id="btn-tts">Fetch + Play TTS</button>
+  <button id="btn-stream">Fetch Converse Stream</button>
+  <button id="btn-stop">Stop All</button>
+
+  <h2>Log</h2>
+  <div id="log"></div>
+
+  <script type="module">
+    const logEl = document.getElementById('log');
+    const rmsVal = document.getElementById('rms-val');
+    const rmsFill = document.getElementById('rms-fill');
+    let audioCtx, analyser, gain, scheduled = new Set(), rafId, nextStart = 0;
+
+    function log(msg, cls = '') {
+      const line = document.createElement('span');
+      line.className = cls;
+      line.textContent = `[${new Date().toISOString().slice(11,23)}] ${msg}\n`;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function initAudio() {
+      if (audioCtx) return;
+      audioCtx = new AudioContext({ latencyHint: 'interactive' });
+      gain = audioCtx.createGain();
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0;
+      gain.connect(analyser);
+      analyser.connect(audioCtx.destination);
+      log('AudioContext created: sampleRate=' + audioCtx.sampleRate, 'ok');
+    }
+
+    function computeRMS() {
+      if (!analyser) return 0;
+      const buf = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteTimeDomainData(buf);
+      let sumSq = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const v = (buf[i] - 128) / 128;
+        sumSq += v * v;
+      }
+      return Math.min(1, Math.sqrt(sumSq / buf.length) * 3);
+    }
+
+    function startRMSLoop() {
+      if (rafId) return;
+      function tick() {
+        const rms = computeRMS();
+        rmsVal.textContent = rms.toFixed(3);
+        rmsFill.style.width = (rms * 100) + '%';
+        rafId = requestAnimationFrame(tick);
+      }
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function stopRMSLoop() {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = 0;
+      rmsVal.textContent = '0.000';
+      rmsFill.style.width = '0';
+    }
+
+    async function scheduleBuffer(arrayBuf) {
+      initAudio();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+      let audioBuf;
+      try {
+        audioBuf = await audioCtx.decodeAudioData(arrayBuf.slice(0));
+        log(`Decoded: ${audioBuf.duration.toFixed(2)}s, ${audioBuf.numberOfChannels}ch, ${audioBuf.sampleRate}Hz`, 'ok');
+      } catch (e) {
+        log(`decodeAudioData FAILED: ${e.message}`, 'err');
+        return;
+      }
+
+      const src = audioCtx.createBufferSource();
+      src.buffer = audioBuf;
+      src.connect(gain);
+      scheduled.add(src);
+      src.onended = () => { src.disconnect(); scheduled.delete(src); if (scheduled.size === 0) { log('Playback done'); stopRMSLoop(); } };
+
+      const at = Math.max(audioCtx.currentTime + 0.02, nextStart);
+      src.start(at);
+      nextStart = at + audioBuf.duration;
+      log(`Scheduled at ${at.toFixed(3)}, duration ${audioBuf.duration.toFixed(2)}s`);
+      startRMSLoop();
+    }
+
+    function stopAll() {
+      for (const src of scheduled) { try { src.stop(); src.disconnect(); } catch {} }
+      scheduled.clear();
+      nextStart = 0;
+      stopRMSLoop();
+      log('Stopped all');
+    }
+
+    // ── Test 1: ONNX ──────────────────────────────────────────
+    document.getElementById('btn-onnx').onclick = async () => {
+      log('Loading ONNX runtime...');
+      try {
+        const ort = await import('/vad/ort-wasm-simd-threaded.mjs');
+        log('ONNX module imported', 'ok');
+
+        // Try loading the VAD model file
+        const resp = await fetch('/vad/silero_vad_v5.onnx');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const bytes = await resp.arrayBuffer();
+        log(`silero_vad_v5.onnx fetched: ${(bytes.byteLength / 1024).toFixed(0)} KB`, 'ok');
+      } catch (e) {
+        log(`ONNX test FAILED: ${e.message}`, 'err');
+      }
+    };
+
+    // ── Test 1b: VAD ──────────────────────────────────────────
+    document.getElementById('btn-vad').onclick = async () => {
+      log('Initializing MicVAD (5 second test)...');
+      try {
+        const { MicVAD } = await import('@ricky0123/vad-web');
+        const vad = await MicVAD.new({
+          baseAssetPath: '/vad/',
+          model: 'v5',
+          ortConfig: (ort) => { ort.env.wasm.wasmPaths = '/vad/'; },
+          redemptionFrames: 8,
+          positiveSpeechThreshold: 0.5,
+          negativeSpeechThreshold: 0.35,
+          minSpeechFrames: 3,
+          preSpeechPadFrames: 2,
+          startOnLoad: true,
+          onSpeechStart: () => log('VAD: speech started', 'ok'),
+          onSpeechEnd: (audio) => log(`VAD: speech ended, ${audio.length} samples (${(audio.length/16000).toFixed(1)}s)`, 'ok'),
+        });
+        log('MicVAD created and running. Speak now...', 'ok');
+        setTimeout(() => { vad.pause(); vad.destroy(); log('VAD destroyed after 5s'); }, 5000);
+      } catch (e) {
+        log(`VAD test FAILED: ${e.message}`, 'err');
+        console.error(e);
+      }
+    };
+
+    // ── Test 2: Tone ──────────────────────────────────────────
+    document.getElementById('btn-tone').onclick = () => {
+      initAudio();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const osc = audioCtx.createOscillator();
+      osc.frequency.value = 440;
+      osc.connect(gain);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 2);
+      scheduled.add(osc);
+      osc.onended = () => { osc.disconnect(); scheduled.delete(osc); stopRMSLoop(); log('Tone ended'); };
+      log('Playing 440Hz tone for 2s...');
+      startRMSLoop();
+    };
+    document.getElementById('btn-stop-tone').onclick = stopAll;
+
+    // ── Test 3: TTS blob ──────────────────────────────────────
+    document.getElementById('btn-tts').onclick = async () => {
+      const sid = document.getElementById('session-id').value;
+      log(`Fetching TTS for session ${sid}...`);
+      try {
+        const res = await fetch(`/api/voice/speak-session/${sid}`, { method: 'POST' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        const blob = await res.blob();
+        log(`TTS blob: ${(blob.size / 1024).toFixed(0)} KB, type=${blob.type}`, 'ok');
+        const buf = await blob.arrayBuffer();
+        await scheduleBuffer(buf);
+      } catch (e) {
+        log(`TTS test FAILED: ${e.message}`, 'err');
+      }
+    };
+
+    // ── Test 3b: Converse stream ──────────────────────────────
+    document.getElementById('btn-stream').onclick = async () => {
+      const sid = document.getElementById('session-id').value;
+      log(`Streaming converse for session ${sid}...`);
+      initAudio();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      startRMSLoop();
+      try {
+        const res = await fetch(`/api/converse/stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: parseInt(sid), text: 'hello', voice: 'en-US-GuyNeural' }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        const reader = res.body.getReader();
+        let buffer = new Uint8Array(0);
+        let sentenceCount = 0;
+
+        function append(chunk) {
+          const next = new Uint8Array(buffer.length + chunk.length);
+          next.set(buffer, 0);
+          next.set(chunk, buffer.length);
+          buffer = next;
+        }
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) append(value);
+
+          // Parse length-prefixed sentences
+          while (buffer.length >= 4) {
+            const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+            const blobLen = view.getUint32(0, false);
+            if (buffer.length < 4 + blobLen) break;
+            const mp3 = buffer.slice(4, 4 + blobLen);
+            buffer = buffer.slice(4 + blobLen);
+            sentenceCount++;
+            log(`Sentence ${sentenceCount}: ${(mp3.length/1024).toFixed(0)} KB MP3`);
+            await scheduleBuffer(mp3.buffer.slice(mp3.byteOffset, mp3.byteOffset + mp3.byteLength));
+          }
+        }
+        log(`Stream done: ${sentenceCount} sentences total`, sentenceCount > 0 ? 'ok' : 'warn');
+      } catch (e) {
+        log(`Converse stream FAILED: ${e.message}`, 'err');
+      }
+    };
+
+    document.getElementById('btn-stop').onclick = stopAll;
+  </script>
+</body>
+</html>

@@ -67,22 +67,23 @@ async def test_run_interview_pipeline_jd_returns_full_result():
     research.search = AsyncMock(return_value={"culture_notes": "High bar", "no_results": False})
     orch = Orchestrator(llm=llm, research=research)
     orch.parser.run = AsyncMock(return_value=_parsed())
-    orch.problem_agent.run = AsyncMock(return_value=_problem())
-    orch.persona.build_voice = AsyncMock(return_value=_voice())
+    raw = {"title": "Two Sum", "difficulty": "Easy", "description": "Find two indices."}
+    orch.problem_agent.fetch_raw = AsyncMock(return_value=raw)
 
     result = await orch.run_interview_pipeline(source="jd", content="jd text")
 
     assert isinstance(result, InterviewPipelineResult)
     assert result.parsed_jd is not None
-    assert result.problem.title == "Two Sum"
-    assert result.persona.persona_text == "You are Alex"
+    assert result.raw_problem["title"] == "Two Sum"
+    assert result.problem is None  # filled by background task
+    assert "Elon" in result.persona.persona_text
 
 
 async def test_run_interview_pipeline_url_has_no_parsed_jd():
     llm = AsyncMock(spec=LLMService)
     orch = Orchestrator(llm=llm)
-    orch.problem_agent.run = AsyncMock(return_value=_problem())
-    orch.persona.build_voice = AsyncMock(return_value=_voice())
+    raw = {"title": "Two Sum", "difficulty": "Easy", "description": "Find two indices."}
+    orch.problem_agent.fetch_raw = AsyncMock(return_value=raw)
 
     result = await orch.run_interview_pipeline(
         source="url",
@@ -90,14 +91,15 @@ async def test_run_interview_pipeline_url_has_no_parsed_jd():
     )
 
     assert result.parsed_jd is None
-    assert result.problem.method_name == "twoSum"
+    assert result.raw_problem["title"] == "Two Sum"
+    assert result.problem is None
 
 
 async def test_run_interview_pipeline_text_has_no_parsed_jd_or_research():
     llm = AsyncMock(spec=LLMService)
     orch = Orchestrator(llm=llm)
-    orch.problem_agent.run = AsyncMock(return_value=_problem())
-    orch.persona.build_voice = AsyncMock(return_value=_voice())
+    raw = {"title": "Two Sum", "difficulty": "Easy", "description": "Find two indices."}
+    orch.problem_agent.fetch_raw = AsyncMock(return_value=raw)
 
     result = await orch.run_interview_pipeline(source="text", content="problem statement")
 
@@ -105,11 +107,12 @@ async def test_run_interview_pipeline_text_has_no_parsed_jd_or_research():
     assert result.research is None
 
 
-async def test_run_interview_pipeline_passes_user_weaknesses_to_persona_build_voice():
+async def test_run_interview_pipeline_passes_user_weaknesses_to_problem_agent():
+    """User weaknesses are passed to the problem agent for problem selection weighting."""
     llm = AsyncMock(spec=LLMService)
     orch = Orchestrator(llm=llm)
-    orch.problem_agent.run = AsyncMock(return_value=_problem())
-    orch.persona.build_voice = AsyncMock(return_value=_voice())
+    raw = {"title": "Two Sum", "difficulty": "Easy", "description": "Find two indices."}
+    orch.problem_agent.fetch_raw = AsyncMock(return_value=raw)
 
     await orch.run_interview_pipeline(
         source="text",
@@ -117,8 +120,8 @@ async def test_run_interview_pipeline_passes_user_weaknesses_to_persona_build_vo
         user_weaknesses=["complexity analysis"],
     )
 
-    persona_voice_input = orch.persona.build_voice.await_args.args[0]
-    assert persona_voice_input.user_weaknesses == ["complexity analysis"]
+    problem_input = orch.problem_agent.fetch_raw.await_args.args[0]
+    assert problem_input.user_weaknesses == ["complexity analysis"]
 
 
 async def test_run_six_axis_scoring_returns_scorecard_v2():

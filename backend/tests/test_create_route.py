@@ -41,8 +41,22 @@ def _parsed() -> ParsedJD:
     )
 
 
+def _raw_problem() -> dict:
+    return {
+        "title": "Two Sum",
+        "difficulty": "Easy",
+        "description": "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target.",
+    }
+
+
 def _pipeline_result(*, parsed: ParsedJD | None = None) -> InterviewPipelineResult:
-    return InterviewPipelineResult(parsed_jd=parsed, problem=_problem(), persona=_voice(), research=None)
+    return InterviewPipelineResult(
+        parsed_jd=parsed,
+        problem=None,
+        raw_problem=_raw_problem(),
+        persona=_voice(),
+        research=None,
+    )
 
 
 def _scorecard_v2() -> ScorecardV2:
@@ -67,7 +81,8 @@ def test_create_session_text_success(client):
         return "Here's your problem."
 
     with patch("app.routes.sessions.orchestrator") as mock_orch, \
-         patch("app.services.llm.LLMService.complete", new=fake_complete):
+         patch("app.services.llm.LLMService.complete", new=fake_complete), \
+         patch("app.routes.sessions._process_problem_background"):
         mock_orch.run_interview_pipeline = AsyncMock(return_value=_pipeline_result(parsed=None))
         resp = client.post(
             "/api/sessions/create",
@@ -78,7 +93,8 @@ def test_create_session_text_success(client):
     data = resp.json()
     assert "session_id" in data
     assert data["problem"]["title"] == "Two Sum"
-    assert data["starter_code"].startswith("class Solution")
+    assert data["problem_ready"] is False   # problem not ready yet — background task pending
+    assert data["starter_code"] is None     # not ready yet
     assert data["opening_message"] == "Here's your problem."
 
 
@@ -86,9 +102,27 @@ def test_create_session_jd_includes_parsed_fields(client):
     async def fake_complete(*_, **__):
         return "Let's start."
 
+    from app.agents.schemas import PersonaOutput, QuestionBank, CodingRound, PipelineResult
+    jd_result = PipelineResult(
+        parsed_jd=_parsed(),
+        persona=PersonaOutput(
+            persona_text="You are Elon.",
+            question_bank=QuestionBank(
+                warmup=["Tell me about yourself"],
+                trivia=["What is O(n)?", "Explain recursion", "What is a hash map?", "What is a stack?"],
+                culture_fit=["Describe a challenge"],
+                coding=CodingRound(type="leetcode", topic="Two Sum", hints=[]),
+            ),
+            prep_plan="Study algorithms.",
+            oa_platform=None,
+        ),
+    )
+
     with patch("app.routes.sessions.orchestrator") as mock_orch, \
-         patch("app.services.llm.LLMService.complete", new=fake_complete):
+         patch("app.services.llm.LLMService.complete", new=fake_complete), \
+         patch("app.routes.sessions._process_problem_background"):
         mock_orch.run_interview_pipeline = AsyncMock(return_value=_pipeline_result(parsed=_parsed()))
+        mock_orch.run_jd_pipeline = AsyncMock(return_value=jd_result)
         resp = client.post(
             "/api/sessions/create",
             json={"source": "jd", "content": "Stripe JD text", "difficulty": "well_done"},
@@ -106,7 +140,8 @@ def test_create_session_url_success(client):
         return "Begin."
 
     with patch("app.routes.sessions.orchestrator") as mock_orch, \
-         patch("app.services.llm.LLMService.complete", new=fake_complete):
+         patch("app.services.llm.LLMService.complete", new=fake_complete), \
+         patch("app.routes.sessions._process_problem_background"):
         mock_orch.run_interview_pipeline = AsyncMock(return_value=_pipeline_result(parsed=None))
         resp = client.post(
             "/api/sessions/create",
@@ -142,7 +177,8 @@ def test_get_session_returns_problem_fields_for_new_session(client):
         return "Here's your problem."
 
     with patch("app.routes.sessions.orchestrator") as mock_orch, \
-         patch("app.services.llm.LLMService.complete", new=fake_complete):
+         patch("app.services.llm.LLMService.complete", new=fake_complete), \
+         patch("app.routes.sessions._process_problem_background"):
         mock_orch.run_interview_pipeline = AsyncMock(return_value=_pipeline_result(parsed=None))
         create_resp = client.post(
             "/api/sessions/create",
@@ -154,10 +190,9 @@ def test_get_session_returns_problem_fields_for_new_session(client):
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["problem_statement"] == _problem().problem_statement
-    assert data["starter_code"] == _problem().starter_code
-    assert data["test_cases"]["method_name"] == "twoSum"
-    assert data["method_name"] == "twoSum"
+    # Problem fields are null until background task completes
+    assert data["problem_statement"] is None
+    assert data["starter_code"] is None
 
 
 def test_finish_session_new_session_returns_six_axis_scorecard_shape(client):
@@ -165,7 +200,8 @@ def test_finish_session_new_session_returns_six_axis_scorecard_shape(client):
         return "Let's begin."
 
     with patch("app.routes.sessions.orchestrator") as mock_orch, \
-         patch("app.services.llm.LLMService.complete", new=fake_complete):
+         patch("app.services.llm.LLMService.complete", new=fake_complete), \
+         patch("app.routes.sessions._process_problem_background"):
         mock_orch.run_interview_pipeline = AsyncMock(return_value=_pipeline_result(parsed=None))
         create_resp = client.post(
             "/api/sessions/create",

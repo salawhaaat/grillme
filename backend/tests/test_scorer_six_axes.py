@@ -43,7 +43,12 @@ async def test_score_six_axes_returns_scorecard_v2_with_all_axes():
     agent = ScorerAgent(llm=llm)
 
     result = await agent.score_six_axes(
-        messages=[{"role": "user", "content": "Can I clarify input constraints?"}],
+        messages=[
+            {"role": "assistant", "content": "Tell me about yourself."},
+            {"role": "user", "content": "Can I clarify input constraints?"},
+            {"role": "assistant", "content": "Sure, go ahead."},
+            {"role": "user", "content": "What is the expected output format?"},
+        ],
         persona="You are an interviewer.",
         problem=_problem(),
     )
@@ -63,9 +68,17 @@ async def test_score_six_axes_includes_clarification_penalty_in_draft_prompt():
     agent = ScorerAgent(llm=llm)
 
     await agent.score_six_axes(
-        messages=[{"role": "user", "content": "class Solution:\n    def solve(self):\n        pass"}],
+        messages=[
+            {"role": "assistant", "content": "Here is the problem."},
+            {"role": "user", "content": "class Solution:\n    def solve(self):\n        pass"},
+            {"role": "assistant", "content": "Walk me through your approach."},
+            {"role": "user", "content": "I think we can use a hash map."},
+        ],
         persona="You are an interviewer.",
     )
+
+    draft_system_prompt = llm.complete.call_args_list[0].args[0][0]["content"]
+    assert "cap `curiosity.score` at 4" in draft_system_prompt
 
     draft_system_prompt = llm.complete.call_args_list[0].args[0][0]["content"]
     assert "cap `curiosity.score` at 4" in draft_system_prompt
@@ -78,6 +91,8 @@ async def test_score_six_axes_closing_questions_can_score_above_six():
 
     result = await agent.score_six_axes(
         messages=[
+            {"role": "assistant", "content": "Tell me about yourself."},
+            {"role": "user", "content": "I have 3 years of backend experience."},
             {"role": "assistant", "content": "Any final questions?"},
             {
                 "role": "user",
@@ -99,7 +114,12 @@ async def test_score_six_axes_computes_weighted_overall_score():
     agent = ScorerAgent(llm=llm)
 
     result = await agent.score_six_axes(
-        messages=[{"role": "user", "content": "Can I clarify expected output ordering?"}],
+        messages=[
+            {"role": "assistant", "content": "Tell me about yourself."},
+            {"role": "user", "content": "Can I clarify expected output ordering?"},
+            {"role": "assistant", "content": "Sure."},
+            {"role": "user", "content": "I have 3 years of Python experience."},
+        ],
         persona="You are an interviewer.",
     )
 

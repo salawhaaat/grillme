@@ -8,18 +8,12 @@ def _create_session(client) -> int:
         return "Opening assistant message"
 
     with patch("app.services.llm.LLMService.complete", new=fake_complete):
-        with patch("app.routes.sessions.orchestrator") as mock_orch:
+        with patch("app.routes.sessions.orchestrator") as mock_orch, \
+             patch("app.routes.sessions._process_problem_background"):
             mock_orch.run_interview_pipeline = AsyncMock(return_value=InterviewPipelineResult(
                 parsed_jd=None,
-                problem=CodingProblem(
-                    title="Two Sum",
-                    difficulty="Easy",
-                    problem_statement="Find two numbers adding to target.",
-                    full_problem="full",
-                    starter_code="class Solution:\n    def add(self, a: int, b: int) -> int:\n        pass\n",
-                    test_cases=[{"input": [1, 2], "expected": 3}],
-                    method_name="add",
-                ),
+                problem=None,
+                raw_problem={"title": "Two Sum", "difficulty": "Easy", "description": "Find two numbers."},
                 persona=PersonaVoice(persona_text="Interviewer", oa_platform=None),
                 research=None,
             ))

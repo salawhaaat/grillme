@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,9 @@ from app.routes.sessions import router as sessions_router
 from app.routes.voice import router as voice_router
 from app.routes.avatar import router as avatar_router
 from app.routes.config import router as config_router
+from app.routes.stt import router as stt_router
+from app.routes.converse import router as converse_router
+from app.services.avatar import avatar_service
 from app.services.llm import RateLimitError, ProviderError
 
 logger = setup_logger(__name__)
@@ -19,6 +23,9 @@ logger = setup_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()   # создаёт таблицы при старте
+    if avatar_service._is_wav2lip_enabled():
+        asyncio.create_task(avatar_service.prerender_smalltalk_clips())
+        asyncio.create_task(avatar_service.prerender_scenario_clips())
     yield
 
 
@@ -69,6 +76,8 @@ app.include_router(sessions_router)
 app.include_router(voice_router)
 app.include_router(avatar_router)
 app.include_router(config_router)
+app.include_router(stt_router)
+app.include_router(converse_router)
 
 
 @app.get("/api/health")

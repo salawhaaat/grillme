@@ -16,7 +16,9 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     groq_api_key: str = ""
     ollama_base_url: str = "http://localhost:11434"
-    avatar_provider: str = "local"
+    ollama_api_key: str = ""
+    ollama_cloud_base_url: str = "https://ollama.com/v1"
+    avatar_provider: str = "wav2lip"
     avatar_service_url: str = "http://localhost:8080"
     videos_dir: str = "/tmp/grillme_videos"
 

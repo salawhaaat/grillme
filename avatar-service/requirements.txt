@@ -3,9 +3,10 @@ uvicorn==0.30.6
 pydantic==2.9.2
 edge-tts==7.2.8
 onnxruntime==1.14.1
-opencv-python==4.8.0.76
+opencv-python-headless==4.8.0.76
 numpy<2
 tqdm
 librosa
 numba
 imutils
+Pillow

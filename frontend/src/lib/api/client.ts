@@ -318,6 +318,72 @@ export const api = {
 
   saveConfig: (provider: string, apiKey: string) =>
     post<{ ok: boolean }>("/config", { provider, api_key: apiKey }),
+
+  /** Poll this after session creation until ready=true, then play video_url. */
+  getIntroStatus: (sessionId: number) =>
+    get<{ ready: boolean; video_url?: string; reason?: string }>(
+      `/avatar/session/${sessionId}/intro`,
+    ),
+
+  /** Poll until problem_ready=true, then show the coding panel. */
+  getProblemStatus: (sessionId: number) =>
+    get<{
+      problem_ready: boolean
+      problem_statement: string | null
+      starter_code: string | null
+      test_cases: { method_name: string; test_cases: Array<{ input: unknown[]; expected: unknown }> } | null
+      method_name: string | null
+    }>(`/sessions/${sessionId}/problem-status`),
+
+  /** Get a random pre-rendered intro clip URL for immediate playback on session load. */
+  getIntroClip: () =>
+    get<{ video_url: string | null }>("/avatar/intro-clip"),
+
+  /** Get pre-rendered smalltalk clip URLs for immediate playback on session load. */
+  getSmallTalkClips: () =>
+    get<{ clips: string[] }>("/avatar/smalltalk"),
+
+  /** Fetch pre-rendered scenario clip manifest. */
+  getScenarioManifest: () =>
+    get<{ clips: Array<{phase: string; index: number; text: string; path: string}> }>("/avatar/scenarios"),
+
+  /** Check pre-render progress (first-time setup). */
+  getPrerenderStatus: () =>
+    get<{ running: boolean; total: number; done: number; phase: string }>("/avatar/prerender-status"),
+
+  /**
+   * Full non-streaming turn: LLM → save → start wav2lip job.
+   * Returns response text immediately + a job_id to poll for the video.
+   * job_id is null when wav2lip is not configured (text-only fallback).
+   */
+  startConverseRespond: (sessionId: number, text: string, voice: string) =>
+    post<{ job_id: string | null; text: string; video_url?: string; prerendered?: boolean }>("/converse/respond", {
+      session_id: sessionId,
+      text,
+      voice,
+    }),
+
+  /** Poll until status=done, then play video_url in the avatar <video> element. */
+  getVideoJob: (jobId: string) =>
+    get<{ status: "pending" | "done" | "error" | "not_found"; video_url?: string; error?: string }>(
+      `/avatar/job/${jobId}`,
+    ),
+
+  /**
+   * One-shot STT: POST raw audio bytes (WAV, webm/opus, or mp4/aac).
+   * Accepts either an ArrayBuffer (WAV path from VAD) or a Blob (PTT path).
+   * Returns the transcribed text.
+   */
+  sttOneshot: async (audio: ArrayBuffer | Blob): Promise<string> => {
+    const res = await fetch(`${BASE}/stt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: audio,
+    })
+    if (!res.ok) throw new Error(await extractErrorMessage(res))
+    const data = (await res.json()) as { text: string }
+    return data.text
+  },
 }
 
 export async function* streamMessage(
@@ -336,6 +402,121 @@ export async function* streamMessage(
     const { done, value } = await reader.read()
     if (done) break
     yield decoder.decode(value, { stream: true })
+  }
+}
+
+/**
+ * Stream the converse endpoint — returns MP3 audio bytes as chunks.
+ * The caller should feed each chunk to StreamingAudioPlayer.scheduleChunk().
+ *
+ * @param signal - AbortController signal to cancel the stream (triggers
+ *                 backend cancellation of LLM + TTS pipeline).
+ * @param onSentence - Optional callback for each sentence text (if using
+ *                     the text SSE sidecar endpoint).
+ */
+/**
+ * Stream the converse endpoint — returns length-prefixed MP3 sentence blobs.
+ *
+ * Wire format: [4-byte big-endian length][MP3 bytes] repeated per sentence.
+ * Each complete MP3 blob is passed to onChunk for decodeAudioData().
+ */
+export async function streamConverse(
+  sessionId: number,
+  text: string,
+  voice: string,
+  signal: AbortSignal,
+  onChunk: (mp3Bytes: ArrayBuffer) => void,
+): Promise<void> {
+  const res = await fetch(`${BASE}/converse/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, text, voice }),
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    throw new Error(await extractErrorMessage(res))
+  }
+
+  const reader = res.body.getReader()
+  let buffer = new Uint8Array(0)
+
+  function append(chunk: Uint8Array) {
+    const next = new Uint8Array(buffer.length + chunk.length)
+    next.set(buffer, 0)
+    next.set(chunk, buffer.length)
+    buffer = next
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (value && value.byteLength > 0) append(value)
+
+    // Parse length-prefixed blobs from buffer
+    while (buffer.length >= 4) {
+      const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+      const blobLen = view.getUint32(0, false) // big-endian
+      if (buffer.length < 4 + blobLen) break   // incomplete blob, wait for more
+
+      // Extract complete MP3 blob
+      const mp3 = buffer.slice(4, 4 + blobLen)
+      buffer = buffer.slice(4 + blobLen)
+      onChunk(mp3.buffer.slice(mp3.byteOffset, mp3.byteOffset + mp3.byteLength))
+    }
+  }
+
+  // Drain any remaining complete blobs
+  while (buffer.length >= 4) {
+    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+    const blobLen = view.getUint32(0, false)
+    if (buffer.length < 4 + blobLen) break
+    const mp3 = buffer.slice(4, 4 + blobLen)
+    buffer = buffer.slice(4 + blobLen)
+    onChunk(mp3.buffer.slice(mp3.byteOffset, mp3.byteOffset + mp3.byteLength))
+  }
+}
+
+/**
+ * Stream the converse text endpoint — returns SSE events with sentence text.
+ * Each event: {"sentence": "...", "done": false/true}
+ */
+export async function streamConverseText(
+  sessionId: number,
+  text: string,
+  voice: string,
+  signal: AbortSignal,
+  onSentence: (sentence: string) => void,
+): Promise<void> {
+  const res = await fetch(`${BASE}/converse/stream-text`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, text, voice }),
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    throw new Error(await extractErrorMessage(res))
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n\n")
+    buffer = lines.pop() ?? ""
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue
+      try {
+        const data = JSON.parse(line.slice(6)) as {
+          sentence?: string
+          done?: boolean
+          error?: string
+        }
+        if (data.error) throw new Error(data.error)
+        if (data.sentence) onSentence(data.sentence)
+      } catch { /* skip malformed */ }
+    }
   }
 }
 

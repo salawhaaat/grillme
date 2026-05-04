@@ -9,6 +9,7 @@ import WhiteboardPage from "@/pages/Whiteboard"
 import ResourcesPage from "@/pages/Resources"
 import SettingsPage from "@/pages/Settings"
 import ProfilePage from "@/pages/Profile"
+import STTTestPage from "@/pages/STTTest"
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/resources" element={<ResourcesPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/stt-test" element={<STTTestPage />} />
       </Routes>
     </BrowserRouter>
   )

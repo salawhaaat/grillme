@@ -1,3 +1,4 @@
+import asyncio
 import json
 import random
 from typing import Any
@@ -53,8 +54,74 @@ class ProblemAgent(BaseAgent):
                 "description": input_data.content,
             }
 
-        cut = await self._paraphrase_and_cut(full)
-        generated = await self._generate_code_and_tests(full)
+        cut, generated = await asyncio.gather(
+            self._paraphrase_and_cut(full),
+            self._generate_code_and_tests(full),
+        )
+
+        return CodingProblem(
+            title=full["title"],
+            difficulty=full["difficulty"],
+            problem_statement=cut,
+            full_problem=full["description"],
+            starter_code=generated["starter_code"],
+            test_cases=generated["test_cases"],
+            method_name=generated["method_name"],
+        )
+
+    async def fetch_raw(self, input_data: ProblemInput) -> dict:
+        """
+        Fast phase — pick problem and scrape raw description. No LLM calls.
+        Returns the raw problem dict {title, difficulty, description}.
+        """
+        source = input_data.source
+        if source == "jd":
+            if not input_data.parsed_jd:
+                raise ValueError("parsed_jd required for jd source")
+            slug = await self._pick_slug_for_company(
+                input_data.parsed_jd,
+                user_weaknesses=input_data.user_weaknesses,
+            )
+            full = await self.scraper.scrape(f"https://leetcode.com/problems/{slug}/")
+            if not full:
+                full = {
+                    "title": "Two Sum",
+                    "difficulty": "Easy",
+                    "description": (
+                        "Given an array of integers nums and an integer target, return indices "
+                        "of the two numbers such that they add up to target."
+                    ),
+                }
+        elif source == "url":
+            full = await self.scraper.scrape(input_data.content)
+            if not full:
+                raise ValueError("Could not scrape URL")
+        else:
+            full = {
+                "title": "Custom Problem",
+                "difficulty": "Medium",
+                "description": input_data.content,
+            }
+        return full
+
+    async def process_raw(self, full: dict) -> CodingProblem:
+        """
+        Slow phase — paraphrase + generate starter code + tests. 2 LLM calls in parallel.
+        Call this as a background task while the interview intro is happening.
+        """
+        cut, generated = await asyncio.gather(
+            self._paraphrase_and_cut(full),
+            self._generate_code_and_tests(full),
+        )
+        return CodingProblem(
+            title=full["title"],
+            difficulty=full["difficulty"],
+            problem_statement=cut,
+            full_problem=full["description"],
+            starter_code=generated["starter_code"],
+            test_cases=generated["test_cases"],
+            method_name=generated["method_name"],
+        )
 
         return CodingProblem(
             title=full["title"],

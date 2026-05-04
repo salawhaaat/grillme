@@ -7,6 +7,7 @@ from app.agents.schemas import (
     InterviewPipelineResult,
     ParseInput,
     PersonaInput,
+    PersonaVoice,
     PersonaVoiceInput,
     PipelineResult,
     ProblemInput,
@@ -73,19 +74,13 @@ class Orchestrator:
     ) -> InterviewPipelineResult:
         _ = difficulty
         parsed_jd: ParsedJD | None = None
-        research_intel: ResearchIntel | None = None
 
         if source == "jd":
             parsed_jd = await self.parser.run(ParseInput(jd_raw=content))
-            if self.research:
-                try:
-                    raw = await self.research.search(parsed_jd.company, parsed_jd.role)
-                    if not raw.get("no_results"):
-                        research_intel = ResearchIntel(**raw)
-                except Exception:
-                    research_intel = None
 
-        problem = await self.problem_agent.run(
+        # Fast phase only — scrape raw problem, no LLM paraphrase/codegen yet
+        from app.agents.schemas import ProblemInput
+        raw_problem = await self.problem_agent.fetch_raw(
             ProblemInput(
                 source=source,
                 content=content,
@@ -94,20 +89,22 @@ class Orchestrator:
             )
         )
 
-        persona = await self.persona.build_voice(
-            PersonaVoiceInput(
-                parsed_jd=parsed_jd,
-                problem=problem,
-                research=research_intel,
-                user_weaknesses=user_weaknesses or [],
-            )
+        # Hardcoded Elon persona — saves 1 LLM call at session start
+        persona = PersonaVoice(
+            persona_text=(
+                "You are Elon Musk conducting a technical interview. "
+                "Be direct, impatient, and think from first principles. "
+                "Ask sharp questions. Cut through fluff immediately."
+            ),
+            oa_platform=None,
         )
 
         return InterviewPipelineResult(
             parsed_jd=parsed_jd,
-            problem=problem,
+            problem=None,        # filled in by background task
+            raw_problem=raw_problem,
             persona=persona,
-            research=research_intel,
+            research=None,
         )
 
     async def run_six_axis_scoring(

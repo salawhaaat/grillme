@@ -18,6 +18,7 @@ Optional env vars:
 """
 
 import asyncio
+import logging
 import os
 import shutil
 import tempfile
@@ -29,6 +30,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 app = FastAPI(title="avatar-service")
+logger = logging.getLogger(__name__)
 
 # ── paths (all overridable via env) ──────────────────────────────────────────
 WAV2LIP_DIR = Path(os.getenv("WAV2LIP_DIR", "/app/wav2lip"))
@@ -61,6 +63,7 @@ CHECKPOINT = _find_checkpoint()
 class GenerateRequest(BaseModel):
     text: str
     voice: str = "en-US-JennyNeural"
+    persona: str | None = None
 
 
 @app.get("/health")
@@ -75,6 +78,8 @@ async def health() -> dict:
 
 @app.post("/generate")
 async def generate(req: GenerateRequest) -> Response:
+    if req.persona:
+        logger.debug("persona=%s", req.persona)
     if not CHECKPOINT.exists():
         raise HTTPException(
             503,

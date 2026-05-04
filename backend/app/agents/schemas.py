@@ -143,6 +143,7 @@ class ScorecardV2(BaseModel):
 
 class InterviewPipelineResult(BaseModel):
     parsed_jd: ParsedJD | None = None
-    problem: CodingProblem
+    problem: CodingProblem | None = None   # None until background task completes
+    raw_problem: dict | None = None        # {title, difficulty, description} — available immediately
     persona: PersonaVoice
     research: ResearchIntel | None = None

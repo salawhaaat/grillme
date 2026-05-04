@@ -2,7 +2,7 @@ import json
 import re
 
 from app.agents.base import BaseAgent
-from app.agents.schemas import CodingProblem, ScorecardV2, ScorecardResult, ScorerInput
+from app.agents.schemas import AxisScore, CodingProblem, ScorecardAxes, ScorecardV2, ScorecardResult, ScorerInput
 
 
 class ScorerAgent(BaseAgent):
@@ -74,10 +74,32 @@ class ScorerAgent(BaseAgent):
     ) -> ScorecardV2:
         transcript = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages)
         user_turns = sum(1 for m in messages if m.get("role") == "user")
+
+        # Not enough data to score — return a neutral scorecard immediately
+        if user_turns < 2:
+            neutral_comment = "Insufficient interview data — candidate did not speak enough to evaluate this axis."
+            scorecard = ScorecardV2(
+                overall_score=5,
+                axes=ScorecardAxes(
+                    technical_correctness=AxisScore(score=5, comment=neutral_comment),
+                    process_of_thought=AxisScore(score=5, comment=neutral_comment),
+                    curiosity=AxisScore(score=5, comment=neutral_comment),
+                    self_presentation=AxisScore(score=5, comment=neutral_comment),
+                    closing_questions=AxisScore(score=5, comment=neutral_comment),
+                    code_quality=AxisScore(score=5, comment=neutral_comment),
+                ),
+                strengths=[],
+                areas_to_improve=["Complete a full interview session to receive meaningful feedback."],
+                recommendation="no_hire",
+            )
+            return scorecard
+
         low_signal_line = (
-            "This was a short interview with limited evidence. Keep scores near midpoint unless strong evidence exists, "
-            "and mention limited evidence in comments."
-            if user_turns < 4
+            "\nIMPORTANT: This interview has very few candidate responses. "
+            "You MUST write 'Insufficient data' in axis comments where there is no evidence. "
+            "Do NOT invent or assume candidate behavior. Keep all scores between 4-6 unless "
+            "there is direct evidence in the transcript."
+            if user_turns < 5
             else ""
         )
         problem_line = ""
@@ -132,6 +154,13 @@ class ScorerAgent(BaseAgent):
             draft = self._extract_failed_generation(str(e))
             if not draft:
                 draft = await self.llm.complete(draft_messages, json_mode=False, temperature=0)
+
+        # Skip the refine pass for local/ollama provider — it doubles latency for minimal gain
+        # on small models. Only run refine for cloud providers with fast inference.
+        provider = getattr(self.llm, '_active_provider', lambda: 'ollama')()
+        if provider in ('ollama',):
+            parsed = await self._parse_scorecard_v2(draft)
+            return parsed.model_copy(update={"overall_score": self._compute_weighted_overall(parsed)})
 
         refine_messages = [
             {
